@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#111313"><meta name="description" content="Explore mathematical surfaces, edit equations, run numerical optimizers, and export solid STL meshes.">
+  <title>Surface Lab — Surface studio</title>
+  <link rel="icon" href="mark.svg" type="image/svg+xml"><link rel="stylesheet" href="style.css">
+  <script defer src="math.js"></script><script defer src="mesh.js"></script><script defer src="optimizer.js"></script><script defer src="renderer.js"></script><script defer src="app.js"></script>
+</head>
+<body>
+<header class="topbar"><div class="header-inner">
+  <a class="brand" href="./" aria-label="Surface Lab home"><img src="mark.svg" width="33" height="33" alt=""><span>Surface Lab</span></a>
+  <nav aria-label="Workspace"><button id="studioNav" class="nav-link active"><i data-icon="cube"></i>Studio</button><button id="libraryNav" class="nav-link"><i data-icon="library"></i>Presets</button><button id="optimizerNav" class="nav-link"><i data-icon="path"></i>Optimizer</button></nav>
+  <button class="guide" id="guideButton" aria-label="Quick guide"><i data-icon="book"></i><span>Quick guide</span></button>
+</div></header>
+<main>
+  <section class="page-heading"><div><h1>Surface studio</h1><p>Shape mathematical expressions into printable 3D meshes.</p></div>
+    <button id="exportButton" class="primary"><i data-icon="download"></i>Export STL</button>
+  </section>
+  <div class="workspace">
+    <section class="panel viewport" id="viewport">
+      <div class="panel-heading"><h2><i data-icon="cube"></i>Surface preview</h2>
+        <div class="view-actions"><label class="view-select"><select id="view" aria-label="Camera view"><option value="orbit">Orbit view</option><option value="top">Top view</option><option value="front">Front view</option><option value="iso">Isometric</option></select><i data-icon="chevron"></i></label><span class="mini-divider"></span><button class="icon-btn" id="fullscreen" title="Expand preview" aria-label="Expand preview"><i data-icon="expand"></i></button></div>
+      </div>
+      <div class="plot"><canvas id="plot" tabindex="0" aria-label="Interactive surface. Use arrow keys to orbit, plus and minus to zoom."></canvas>
+        <div class="plot-title"><div class="surface-tag"><span></span><span id="plotType">EXPLICIT SURFACE</span></div><h3 id="plotName">Hyperbolic paraboloid</h3></div>
+        <div class="plot-tools"><button class="icon-btn" id="zoomIn" title="Zoom in" aria-label="Zoom in"><i data-icon="plus"></i></button><button class="icon-btn" id="zoomOut" title="Zoom out" aria-label="Zoom out"><i data-icon="minus"></i></button><span></span><button class="icon-btn" id="resetView" title="Reset view" aria-label="Reset view"><i data-icon="reset"></i></button></div>
+        <div class="view-modes" aria-label="Preview style"><button class="selected" data-mode="surface">Surface</button><button data-mode="wire">Wireframe</button><button data-mode="print">Print mesh</button></div>
+      </div>
+      <div class="viewport-footer"><span><i data-icon="mouse"></i>Drag to orbit<span class="dot-sep">·</span>Scroll to zoom</span><span class="mesh-count"><i data-icon="mesh"></i><span id="faceCount"></span></span></div>
+    </section>
+    <aside class="panel controls"><div class="panel-heading"><h2 id="controlsTitle"><i data-icon="sliders"></i>Surface controls</h2><button class="icon-btn" id="resetControls" aria-label="Restore preset defaults" title="Restore preset defaults"><i data-icon="reset"></i></button></div>
+      <div class="control-content" id="editorPane">
+        <label class="field-title" for="expression">Expression <span class="muted mono" id="exprType">z = f(x, y)</span></label>
+        <div class="expr-box"><span class="fx">ƒ</span><textarea id="expression" spellcheck="false" aria-describedby="error"></textarea></div>
+        <div class="control-section"><div class="field-title">Domain <span class="muted mini-label" id="domainHint">MIN / MAX</span></div><div id="domainInputs"></div></div>
+        <div class="control-section"><label class="field-title" for="resolution">Mesh resolution <output id="resValue" class="value-chip"></output></label><input type="range" id="resolution" min="16" max="128" step="4" value="64"><div class="range-ends"><span>Coarse</span><span>Fine</span></div></div>
+        <div class="control-section color-row"><span class="field-title">Surface color</span><div class="swatches" id="swatches" role="group" aria-label="Surface color"></div></div>
+        <p class="error" id="error" role="alert" hidden></p>
+      </div>
+      <div id="optimizerPane" class="control-content" hidden>
+        <p class="pane-intro">Search the current domain for a minimum or maximum.</p>
+        <form id="optForm"><label>Method<select id="method"><option value="simplex">Nelder–Mead</option><option value="gradient">Projected gradient descent</option><option value="grid">Multistage grid search</option></select></label>
+          <div class="inline-options"><label>Objective<select id="goal"><option value="min">Minimum</option><option value="max">Maximum</option></select></label><label>Start X<input type="number" id="startX" step="any" required></label><label>Start Y<input type="number" id="startY" step="any" required></label></div>
+          <button class="secondary full" id="runOpt"><i data-icon="path"></i>Run optimizer</button></form>
+        <div id="optResult" class="opt-result" aria-live="polite"></div>
+      </div>
+    </aside>
+  </div>
+  <section class="gallery"><div class="gallery-heading"><div><h2>Surface presets</h2><p>Start with a classic or explore a more unusual form.</p></div><button id="browseButton" class="browse">Browse library<i data-icon="arrow"></i></button></div><div class="cards" id="cards"></div></section>
+</main>
+<dialog id="libraryDialog" class="large-dialog"><div class="dialog-heading"><div><h2>Preset library</h2><p>Choose a surface to open in the studio.</p></div><button class="close icon-btn" aria-label="Close library"><i data-icon="close"></i></button></div>
+  <div class="library-filters"><input id="search" type="search" placeholder="Search presets…" aria-label="Search presets"><select id="category" aria-label="Preset category"><option>All categories</option></select></div><div id="allCards" class="all-cards"></div></dialog>
+<dialog id="exportDialog"><div class="dialog-heading"><div><h2>Export STL</h2><p id="exportName"></p></div><button class="close icon-btn" aria-label="Close export"><i data-icon="close"></i></button></div>
+  <form id="exportForm"><div class="export-preview"><canvas id="exportCanvas" aria-label="Preview of the exported solid"></canvas></div>
+    <div class="print-fields"><label id="constructionLabel">Mesh style<select id="construction"><option value="base">Flat base</option><option value="shell">Thickened surface</option></select></label>
+    <label id="thicknessLabel"><span id="thicknessName">Base thickness</span> <span>(mm)</span><input type="number" id="base" min="0.1" max="100" step="any" required value="2"></label>
+    <p id="shellHint" class="shell-hint" hidden>The wall follows both sides of the graph and closes at the edges. Solid dimensions include the wall.</p>
+    <label><span id="widthName">Longest XY side</span> <span>(mm)</span><input type="number" id="width" min="5" max="1000" step="any" required value="100"></label>
+    <label>Surface relief <span>(mm)</span><input type="number" id="relief" min="0.1" max="1000" step="any" required value="58"></label>
+    </div>
+    <div class="export-summary"><span>Solid dimensions</span><strong id="dimensions"></strong><span>Binary STL</span><strong id="fileSize"></strong></div><p id="exportError" class="error" role="alert" hidden></p>
+    <button class="primary full" type="submit" id="download"><i data-icon="download"></i>Download STL</button>
+  </form></dialog>
+<dialog id="guideDialog"><div class="dialog-heading"><h2>Quick guide</h2><button class="close icon-btn" aria-label="Close guide"><i data-icon="close"></i></button></div><div class="guide-copy">
+  <h3>Build a surface</h3><p>Choose a preset or enter a height equation in x and y. Try <code>cos(x) * sin(y)</code>. Choose a domain where the expression is finite and continuous. Changes update the preview automatically. Use ^ for powers, pi for π, and radians for angles.</p>
+  <details><summary>Supported functions</summary><p>sin, cos, tan, asin, acos, atan, sinh, cosh, tanh, exp, log (natural), log10, sqrt, abs, floor, ceil, sinc, min, max, pow, hypot and atan2. The last five take two arguments. sinc(0) is 1.</p></details>
+  <h3>Explore the mesh</h3><p>Drag to orbit or scroll to zoom. Focus the preview and use arrow keys or + and − for keyboard control. Wireframe shows sampling density. Print mesh shows the solid geometry.</p>
+  <h3>Find an extremum</h3><p>In Optimizer, choose a method and starting point. Gradient descent follows the local slope, Nelder–Mead moves a triangle, and grid search refines the best sampled region. Results are bounded numerical estimates. <a href="https://www.sfu.ca/~ssurjano/optimization.html" target="_blank" rel="noreferrer">Optimization test functions ↗</a></p>
+  <h3>Prepare a print</h3><p>For a height graph, open Export STL and choose Flat base or Thickened surface. A thickened surface adds half the wall thickness to each side along the local normal, then joins the edges. The XY span and relief set the size of the original graph. Check Solid dimensions for the final size. The catenoid uses a radial wall, and closed parametric shapes export as solids. Import the STL in millimeters and check orientation and supports in your slicer.</p>
+</div></dialog>
+<div class="toast" id="toast" role="status"></div>
+</body></html>
