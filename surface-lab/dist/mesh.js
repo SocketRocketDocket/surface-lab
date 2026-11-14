@@ -1,8 +1,12 @@
 const SurfaceGeometry = (() => {
   const {compile,compileParametric,cross} = SurfaceMath;
+  function validateGrid(n,nv){
+    if(![n,nv].every(v=>Number.isInteger(v)&&v>=4)||(n+1)*(nv+1)>257*257)
+      throw Error('Use at least 5 samples per axis and at most 66,049 samples in total.');
+  }
   function sample(spec,n,nv=n) {
     const {shape,domain,formula} = spec;
-    if (![n,nv].every(v=>Number.isInteger(v)&&v>=4&&v<=256)) throw Error('Choose a resolution between 4 and 256.');
+    validateGrid(n,nv);
     const vertices=[], faces=[], quads=[];
     const min=[Infinity,Infinity,Infinity],max=[-Infinity,-Infinity,-Infinity];
     const fn = shape ? compileParametric(formula) : compile(formula);
@@ -23,6 +27,10 @@ const SurfaceGeometry = (() => {
     const alongV=Array.from({length:nv+1},(_,j)=>j);
     const sameU=Boolean(shape)&&alongV.every(j=>coincides(j*stride,j*stride+n));
     const periodicV=Boolean(shape)&&alongU.every(i=>coincides(i,nv*stride+i));
+    const collapsedBoundary=Boolean(shape)&&(
+      (!periodicV&&[0,nv*stride].some(start=>alongU.every(i=>coincides(start,start+i))))||
+      (!sameU&&[0,n].some(start=>alongV.every(j=>coincides(start,start+j*stride))))
+    );
     let twist=-1;
     if(periodicV&&!sameU){
       // The Klein bottle identifies (uMax,v) with (uMin, pi-v).
@@ -47,7 +55,7 @@ const SurfaceGeometry = (() => {
     }
     // An edited equation may open or close a seam independently of its starting preset.
     const radialWall=shape==='catenoid' && formula===SurfaceMath.presets.find(p=>p.id==='catenoid').formula;
-    return {vertices,faces,quads,min,max,n,nv,at,columns,rows,shape,periodicU,periodicV,twisted:twist>=0,radialWall};
+    return {vertices,faces,quads,min,max,n,nv,at,columns,rows,shape,periodicU,periodicV,twisted:twist>=0,collapsedBoundary,radialWall};
   }
   // Fit X and Y with one scale factor. Relief is independently specified in mm.
   function transform(mesh,width,relief) {
@@ -94,7 +102,7 @@ const SurfaceGeometry = (() => {
     if (![width,relief,thickness].every(v=>Number.isFinite(v)&&v>0)) throw Error('Print dimensions must be positive.');
     const convert=transform(mesh,width,relief), vertices=mesh.vertices.map(convert), faces=mesh.faces.slice();
     const {n,nv,at,shape}=mesh;
-    if(mesh.twisted) return SurfaceWall.fused(mesh,vertices,width,relief,thickness);
+    if(mesh.twisted||mesh.collapsedBoundary) return SurfaceWall.fused(mesh,vertices,width,relief,thickness);
     function bridge(a,b,c,d){faces.push([a,b,c],[a,c,d]);}
     if(!shape) {
       const ring=[];
@@ -157,5 +165,5 @@ const SurfaceGeometry = (() => {
     }
     return buffer;
   }
-  return {sample,transform,solid,binarySTL};
+  return {sample,transform,solid,binarySTL,validateGrid};
 })();

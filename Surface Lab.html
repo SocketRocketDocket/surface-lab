@@ -28,7 +28,8 @@ const SurfaceMath = (() => {
     sinh: Math.sinh, cosh: Math.cosh, tanh: Math.tanh, sqrt: Math.sqrt, abs: Math.abs, exp: Math.exp,
     log: Math.log, ln: Math.log, log10: Math.log10, floor: Math.floor, ceil: Math.ceil,
     sinc: x => Math.abs(x) < 1e-9 ? 1 : Math.sin(x) / x,
-    min: Math.min, max: Math.max, atan2: Math.atan2, hypot: Math.hypot, pow: Math.pow
+    min: Math.min, max: Math.max, atan2: Math.atan2, hypot: Math.hypot, pow: Math.pow,
+    rmod: (x,y) => x%y
   };
   function compile(source,parameters=['x','y'],locals=Object.create(null)) {
     const clean = (parameters[0]==='x'?source.trim().replace(/^z\s*=\s*/i,''):source.trim()).toLowerCase()
@@ -66,7 +67,7 @@ const SurfaceMath = (() => {
         let second;
         if (tokens[i] === ',') { i++; second = conditional(); }
         if (tokens[i++] !== ')') throw Error('Check the function parentheses.');
-        const binary = ['min','max','atan2','hypot','pow'].includes(t);
+        const binary = ['min','max','atan2','hypot','pow','rmod'].includes(t);
         if (binary !== Boolean(second)) throw Error(t + ' takes ' + (binary ? 'two arguments.' : 'one argument.'));
         return second ? (x,y) => functions[t](first(x,y),second(x,y)) : (x,y) => functions[t](first(x,y));
       }
@@ -209,14 +210,21 @@ const SurfaceMath = (() => {
 const SurfaceOrigin = (() => {
   const id='[a-zA-Z_][a-zA-Z0-9_]*';
   const identifier=new RegExp('^'+id+'$');
-  const replaceNames=(text,names)=>text.replace(/[a-zA-Z_][a-zA-Z0-9_]*/g,key=>names.get(key.toLowerCase())??key);
 
   function translate(script,coordinates,parameters){
     let rest=script.replace(/\/\*[\s\S]*?\*\//g,' ').replace(/\/\/[^\r\n]*/g,' ').trim();
-    const globals=new Map(), helpers=new Map(), lines=[];
+    const globals=new Map(), declarations=[], helpers=new Map(), lines=[], bindings=new Map();
     const head=new RegExp('^function\\s+double\\s+('+id+')\\s*\\(([^()]*)\\)\\s*','i');
     const declaration=new RegExp('^double\\s+('+id+')\\s*=\\s*([^;{}]+);\\s*','i');
-    const binding=(expression)=>{const name='local'+(lines.length+1);lines.push(name+' = '+expression.trim().replace(/\s+/g,' '));return name;};
+    let length=0;
+    function binding(expression){
+      const value=expression.trim().replace(/\s+/g,' ');
+      if(bindings.has(value))return bindings.get(value);
+      const name='local'+(lines.length+1),line=name+' = '+value;
+      length+=line.length+1;
+      if(length>24576)throw Error('Translated Origin expressions exceed the editor length limit.');
+      lines.push(line);bindings.set(value,name);return name;
+    }
     function take(pattern,error){
       const m=rest.match(pattern);
       if(!m) throw Error(error);
@@ -257,28 +265,46 @@ const SurfaceOrigin = (() => {
         helpers.set(key,{params,locals,result});
       }else{
         const [,key,expr]=take(declaration,'Unsupported Origin script. Use numeric double declarations and functions with return or if/else.');
-        globals.set(key.toLowerCase(),binding(replaceNames(expr,globals)));
+        declarations.push([key.toLowerCase(),expr]);
       }
     }
+    const calls=new Map();
+    function expand(expression,names,active=[]){
+      const words=/\b[a-z_][a-z0-9_]*\b/gi;
+      let output='',end=0,word;
+      while((word=words.exec(expression))){
+        const key=word[0].toLowerCase(),helper=helpers.get(key);
+        output+=expression.slice(end,word.index);end=words.lastIndex;
+        const opening=helper&&/^\s*\(/.exec(expression.slice(end));
+        if(!opening){output+=names.get(key)??word[0];continue;}
+        let start=end+opening[0].length,depth=1,i=start;
+        const args=[];
+        for(;i<expression.length;i++){
+          const ch=expression[i];
+          if(ch==='(')depth++;
+          if(ch===')'&&--depth===0)break;
+          if(ch===','&&depth===1){args.push(expression.slice(start,i));start=i+1;}
+        }
+        if(depth)throw Error('Unclosed call to '+key+'.');
+        if(args.length||expression.slice(start,i).trim())args.push(expression.slice(start,i));
+        if(args.length!==helper.params.length||args.some(a=>!a.trim()))throw Error('Wrong arguments to '+key+'.');
+        if(active.includes(key))throw Error('Recursive Origin helper '+key+' is unsupported.');
+        const actual=args.map(arg=>expand(arg.trim(),names,active));
+        const call=JSON.stringify([key,...actual]);
+        if(!calls.has(call)){
+          const scope=new Map(globals),stack=[...active,key];
+          helper.params.forEach((param,k)=>scope.set(param,identifier.test(actual[k])?actual[k]:binding(actual[k])));
+          for(const [local,expr] of helper.locals)scope.set(local,binding(expand(expr,scope,stack)));
+          calls.set(call,binding(expand(helper.result,scope,stack)));
+        }
+        output+=calls.get(call);end=words.lastIndex=i+1;
+      }
+      return output+expression.slice(end);
+    }
+    for(const [key,expr] of declarations)globals.set(key,binding(expand(expr,globals)));
     const names=new Map(globals);
     parameters.forEach((p,i)=>names.set(p.toLowerCase(),['u','v'][i]));
-    const tuple=coordinates.map(expression=>{
-      const call=expression.match(/^([a-z_][\w]*)\s*\(([\s\S]*)\)$/i);
-      const helper=call&&helpers.get(call[1].toLowerCase());
-      if(!helper) return replaceNames(expression,names);
-      const args=[];let depth=0,start=0;
-      for(let i=0;i<call[2].length;i++){
-        const c=call[2][i];
-        if(c==='(')depth++;if(c===')')depth--;
-        if(c===','&&!depth){args.push(call[2].slice(start,i));start=i+1;}
-      }
-      if(call[2].trim()) args.push(call[2].slice(start));
-      if(args.length!==helper.params.length) throw Error('Wrong number of arguments to '+call[1]+'.');
-      const scope=new Map(globals);
-      helper.params.forEach((p,i)=>scope.set(p,'('+replaceNames(args[i],names)+')'));
-      for(const [key,expr] of helper.locals)scope.set(key,binding(replaceNames(expr,scope)));
-      return replaceNames(helper.result,scope);
-    });
+    const tuple=coordinates.map(expression=>expand(expression,names));
     return [...lines,'('+tuple.join(',\n ')+')'].join('\n');
   }
 
@@ -302,7 +328,7 @@ const SurfaceOrigin = (() => {
     const domain=['str1stFrom','str1stTo','str2ndFrom','str2ndTo'].map(key=>SurfaceMath.compile(required(key),[])(0,0));
     if(!domain.every(Number.isFinite)||domain[0]>=domain[1]||domain[2]>=domain[3])throw Error('Invalid Origin parameter limits.');
     const samples=['nCols','nRows'].map(key=>Number(required(key)));
-    if(!samples.every(n=>Number.isInteger(n)&&n>=5&&n<=257)) throw Error('Use 5 to 257 samples per axis in the Origin definition.');
+    SurfaceGeometry.validateGrid(samples[0]-1,samples[1]-1);
     const formula=translate(fields.get('strPrescript')||'',['str1stFormula','str2ndFormula','str3rdFormula'].map(required),parameters);
     SurfaceMath.compileParametric(formula);
     const name=filename.replace(/\.(?:ofp|xml)$/i,'').replace(/^\d+-ParamFunc3D-/i,'').replace(/_/g,' ')||'Imported surface';
@@ -398,9 +424,13 @@ const SurfaceWall=(()=>{
 })();
 </script><script>const SurfaceGeometry = (() => {
   const {compile,compileParametric,cross} = SurfaceMath;
+  function validateGrid(n,nv){
+    if(![n,nv].every(v=>Number.isInteger(v)&&v>=4)||(n+1)*(nv+1)>257*257)
+      throw Error('Use at least 5 samples per axis and at most 66,049 samples in total.');
+  }
   function sample(spec,n,nv=n) {
     const {shape,domain,formula} = spec;
-    if (![n,nv].every(v=>Number.isInteger(v)&&v>=4&&v<=256)) throw Error('Choose a resolution between 4 and 256.');
+    validateGrid(n,nv);
     const vertices=[], faces=[], quads=[];
     const min=[Infinity,Infinity,Infinity],max=[-Infinity,-Infinity,-Infinity];
     const fn = shape ? compileParametric(formula) : compile(formula);
@@ -421,6 +451,10 @@ const SurfaceWall=(()=>{
     const alongV=Array.from({length:nv+1},(_,j)=>j);
     const sameU=Boolean(shape)&&alongV.every(j=>coincides(j*stride,j*stride+n));
     const periodicV=Boolean(shape)&&alongU.every(i=>coincides(i,nv*stride+i));
+    const collapsedBoundary=Boolean(shape)&&(
+      (!periodicV&&[0,nv*stride].some(start=>alongU.every(i=>coincides(start,start+i))))||
+      (!sameU&&[0,n].some(start=>alongV.every(j=>coincides(start,start+j*stride))))
+    );
     let twist=-1;
     if(periodicV&&!sameU){
       // The Klein bottle identifies (uMax,v) with (uMin, pi-v).
@@ -445,7 +479,7 @@ const SurfaceWall=(()=>{
     }
     // An edited equation may open or close a seam independently of its starting preset.
     const radialWall=shape==='catenoid' && formula===SurfaceMath.presets.find(p=>p.id==='catenoid').formula;
-    return {vertices,faces,quads,min,max,n,nv,at,columns,rows,shape,periodicU,periodicV,twisted:twist>=0,radialWall};
+    return {vertices,faces,quads,min,max,n,nv,at,columns,rows,shape,periodicU,periodicV,twisted:twist>=0,collapsedBoundary,radialWall};
   }
   // Fit X and Y with one scale factor. Relief is independently specified in mm.
   function transform(mesh,width,relief) {
@@ -492,7 +526,7 @@ const SurfaceWall=(()=>{
     if (![width,relief,thickness].every(v=>Number.isFinite(v)&&v>0)) throw Error('Print dimensions must be positive.');
     const convert=transform(mesh,width,relief), vertices=mesh.vertices.map(convert), faces=mesh.faces.slice();
     const {n,nv,at,shape}=mesh;
-    if(mesh.twisted) return SurfaceWall.fused(mesh,vertices,width,relief,thickness);
+    if(mesh.twisted||mesh.collapsedBoundary) return SurfaceWall.fused(mesh,vertices,width,relief,thickness);
     function bridge(a,b,c,d){faces.push([a,b,c],[a,c,d]);}
     if(!shape) {
       const ring=[];
@@ -555,7 +589,7 @@ const SurfaceWall=(()=>{
     }
     return buffer;
   }
-  return {sample,transform,solid,binarySTL};
+  return {sample,transform,solid,binarySTL,validateGrid};
 })();
 </script><script>const SurfaceOptimize = (() => {
   function search(fn,domain,start,method,goal) {
@@ -831,7 +865,7 @@ const SurfaceWall=(()=>{
     $('parametricHelp').hidden=!p.shape;
     $('exprType').textContent=p.shape?'r(u, v)':'z = f(x, y)';
     $('width').value=100;$('relief').value=p.relief;$('base').value=2;
-    $('resolution').min=p.grid?4:16;$('resolution').max=p.grid?256:128;$('resolution').step=p.grid?1:4;
+    $('resolution').min=p.grid?4:16;$('resolution').max=p.grid?Math.max(256,...p.grid):128;$('resolution').step=p.grid?1:4;
     $('resolution').value=p.grid?Math.max(...p.grid):64;$('construction').value='base';
     domainControls();colorControls();resetStart();resetCamera();refresh(readyMesh);setOptimizer(optimizing);
   }
@@ -913,8 +947,9 @@ const SurfaceWall=(()=>{
     const closed=mesh.periodicU&&mesh.periodicV;
     $('constructionLabel').hidden=Boolean(spec.shape);
     $('shellHint').hidden=!shell;
-    $('twistHint').hidden=!mesh.twisted;
-    $('thicknessLabel').hidden=Boolean(spec.shape)&&closed&&!mesh.twisted;
+    $('twistHint').hidden=!mesh.twisted&&!mesh.collapsedBoundary;
+    $('twistHint').textContent=mesh.twisted?'The surface twists through itself. Export creates a wall with an approximate thickness and fuses the crossing.':'A surface edge meets at a point. Export creates a wall of approximate thickness and joins overlapping regions.';
+    $('thicknessLabel').hidden=Boolean(spec.shape)&&closed&&!mesh.twisted&&!mesh.collapsedBoundary;
     $('base').disabled=$('thicknessLabel').hidden;
     $('thicknessName').textContent=mesh.radialWall?'Radial wall':spec.shape||shell?'Wall thickness':'Base thickness';
     $('widthName').textContent=shell?'Graph XY span':'Longest XY side';
@@ -1044,7 +1079,7 @@ const SurfaceWall=(()=>{
 <dialog id="guideDialog"><div class="dialog-heading"><h2>Quick guide</h2><button class="close icon-btn" aria-label="Close guide"><i data-icon="close"></i></button></div><div class="guide-copy">
   <h3>Build a surface</h3><p>Choose a preset or enter a height equation in x and y. Try <code>cos(x) * sin(y)</code>. Choose a domain where the expression is finite and continuous. Changes update the preview automatically. Use ^ for powers, pi for π, and radians for angles.</p>
   <p>For a parametric surface, open Torus, Catenoid or Trefoil knot and edit the coordinate tuple in the expression field. On the torus, try changing <code>minor = 0.72</code> to <code>minor = 1</code> to thicken its ring. A tuple may also start with <code>r(u,v) =</code>. Matching domain edges join at a seam. Open sheets use the wall thickness in Export STL.</p>
-  <details><summary>Supported functions</summary><p>sin, cos, tan, asin, acos, atan, sinh, cosh, tanh, exp, log (natural), log10, sqrt, abs, floor, ceil, sinc, min, max, pow, hypot and atan2. The last five take two arguments. sinc(0) is 1.</p></details>
+  <details><summary>Supported functions</summary><p>sin, cos, tan, asin, acos, atan, sinh, cosh, tanh, exp, log (natural), log10, sqrt, abs, floor, ceil and sinc take one argument. min, max, pow, hypot, atan2 and rmod take two. sinc(0) is 1.</p></details>
   <h3>Piecewise and Origin formulas</h3><p>Use <code>if(x &lt; 0, -x, x)</code> or <code>x &lt; 0 ? -x : x</code> in a height or coordinate expression. Nest conditions for additional branches. Combine comparisons with <code>&amp;&amp;</code>, <code>||</code> and <code>!</code>.</p><p>Choose <b>Import Origin file</b> to load a 3D parametric Settings definition (.ofp or .xml). Surface Lab translates numeric declarations and coordinate helpers with return and if/else branches. Edit the translated tuple or find Klein bottle in the preset library.</p>
   <h3>Explore the mesh</h3><p>Drag to orbit or scroll to zoom. Focus the preview and use arrow keys or + and − for keyboard control. Wireframe shows sampling density. Print mesh shows the solid geometry.</p>
   <h3>Find an extremum</h3><p>In Optimizer, choose a method and starting point. Gradient descent follows the local slope, Nelder–Mead moves a triangle, and grid search refines the best sampled region. Results are bounded numerical estimates. <a href="https://www.sfu.ca/~ssurjano/optimization.html" target="_blank" rel="noreferrer">Optimization test functions ↗</a></p>

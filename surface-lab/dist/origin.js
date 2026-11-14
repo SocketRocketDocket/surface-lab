@@ -2,14 +2,21 @@
 const SurfaceOrigin = (() => {
   const id='[a-zA-Z_][a-zA-Z0-9_]*';
   const identifier=new RegExp('^'+id+'$');
-  const replaceNames=(text,names)=>text.replace(/[a-zA-Z_][a-zA-Z0-9_]*/g,key=>names.get(key.toLowerCase())??key);
 
   function translate(script,coordinates,parameters){
     let rest=script.replace(/\/\*[\s\S]*?\*\//g,' ').replace(/\/\/[^\r\n]*/g,' ').trim();
-    const globals=new Map(), helpers=new Map(), lines=[];
+    const globals=new Map(), declarations=[], helpers=new Map(), lines=[], bindings=new Map();
     const head=new RegExp('^function\\s+double\\s+('+id+')\\s*\\(([^()]*)\\)\\s*','i');
     const declaration=new RegExp('^double\\s+('+id+')\\s*=\\s*([^;{}]+);\\s*','i');
-    const binding=(expression)=>{const name='local'+(lines.length+1);lines.push(name+' = '+expression.trim().replace(/\s+/g,' '));return name;};
+    let length=0;
+    function binding(expression){
+      const value=expression.trim().replace(/\s+/g,' ');
+      if(bindings.has(value))return bindings.get(value);
+      const name='local'+(lines.length+1),line=name+' = '+value;
+      length+=line.length+1;
+      if(length>24576)throw Error('Translated Origin expressions exceed the editor length limit.');
+      lines.push(line);bindings.set(value,name);return name;
+    }
     function take(pattern,error){
       const m=rest.match(pattern);
       if(!m) throw Error(error);
@@ -50,28 +57,46 @@ const SurfaceOrigin = (() => {
         helpers.set(key,{params,locals,result});
       }else{
         const [,key,expr]=take(declaration,'Unsupported Origin script. Use numeric double declarations and functions with return or if/else.');
-        globals.set(key.toLowerCase(),binding(replaceNames(expr,globals)));
+        declarations.push([key.toLowerCase(),expr]);
       }
     }
+    const calls=new Map();
+    function expand(expression,names,active=[]){
+      const words=/\b[a-z_][a-z0-9_]*\b/gi;
+      let output='',end=0,word;
+      while((word=words.exec(expression))){
+        const key=word[0].toLowerCase(),helper=helpers.get(key);
+        output+=expression.slice(end,word.index);end=words.lastIndex;
+        const opening=helper&&/^\s*\(/.exec(expression.slice(end));
+        if(!opening){output+=names.get(key)??word[0];continue;}
+        let start=end+opening[0].length,depth=1,i=start;
+        const args=[];
+        for(;i<expression.length;i++){
+          const ch=expression[i];
+          if(ch==='(')depth++;
+          if(ch===')'&&--depth===0)break;
+          if(ch===','&&depth===1){args.push(expression.slice(start,i));start=i+1;}
+        }
+        if(depth)throw Error('Unclosed call to '+key+'.');
+        if(args.length||expression.slice(start,i).trim())args.push(expression.slice(start,i));
+        if(args.length!==helper.params.length||args.some(a=>!a.trim()))throw Error('Wrong arguments to '+key+'.');
+        if(active.includes(key))throw Error('Recursive Origin helper '+key+' is unsupported.');
+        const actual=args.map(arg=>expand(arg.trim(),names,active));
+        const call=JSON.stringify([key,...actual]);
+        if(!calls.has(call)){
+          const scope=new Map(globals),stack=[...active,key];
+          helper.params.forEach((param,k)=>scope.set(param,identifier.test(actual[k])?actual[k]:binding(actual[k])));
+          for(const [local,expr] of helper.locals)scope.set(local,binding(expand(expr,scope,stack)));
+          calls.set(call,binding(expand(helper.result,scope,stack)));
+        }
+        output+=calls.get(call);end=words.lastIndex=i+1;
+      }
+      return output+expression.slice(end);
+    }
+    for(const [key,expr] of declarations)globals.set(key,binding(expand(expr,globals)));
     const names=new Map(globals);
     parameters.forEach((p,i)=>names.set(p.toLowerCase(),['u','v'][i]));
-    const tuple=coordinates.map(expression=>{
-      const call=expression.match(/^([a-z_][\w]*)\s*\(([\s\S]*)\)$/i);
-      const helper=call&&helpers.get(call[1].toLowerCase());
-      if(!helper) return replaceNames(expression,names);
-      const args=[];let depth=0,start=0;
-      for(let i=0;i<call[2].length;i++){
-        const c=call[2][i];
-        if(c==='(')depth++;if(c===')')depth--;
-        if(c===','&&!depth){args.push(call[2].slice(start,i));start=i+1;}
-      }
-      if(call[2].trim()) args.push(call[2].slice(start));
-      if(args.length!==helper.params.length) throw Error('Wrong number of arguments to '+call[1]+'.');
-      const scope=new Map(globals);
-      helper.params.forEach((p,i)=>scope.set(p,'('+replaceNames(args[i],names)+')'));
-      for(const [key,expr] of helper.locals)scope.set(key,binding(replaceNames(expr,scope)));
-      return replaceNames(helper.result,scope);
-    });
+    const tuple=coordinates.map(expression=>expand(expression,names));
     return [...lines,'('+tuple.join(',\n ')+')'].join('\n');
   }
 
@@ -95,7 +120,7 @@ const SurfaceOrigin = (() => {
     const domain=['str1stFrom','str1stTo','str2ndFrom','str2ndTo'].map(key=>SurfaceMath.compile(required(key),[])(0,0));
     if(!domain.every(Number.isFinite)||domain[0]>=domain[1]||domain[2]>=domain[3])throw Error('Invalid Origin parameter limits.');
     const samples=['nCols','nRows'].map(key=>Number(required(key)));
-    if(!samples.every(n=>Number.isInteger(n)&&n>=5&&n<=257)) throw Error('Use 5 to 257 samples per axis in the Origin definition.');
+    SurfaceGeometry.validateGrid(samples[0]-1,samples[1]-1);
     const formula=translate(fields.get('strPrescript')||'',['str1stFormula','str2ndFormula','str3rdFormula'].map(required),parameters);
     SurfaceMath.compileParametric(formula);
     const name=filename.replace(/\.(?:ofp|xml)$/i,'').replace(/^\d+-ParamFunc3D-/i,'').replace(/_/g,' ')||'Imported surface';

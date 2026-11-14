@@ -5,7 +5,8 @@ const SurfaceMath = (() => {
     sinh: Math.sinh, cosh: Math.cosh, tanh: Math.tanh, sqrt: Math.sqrt, abs: Math.abs, exp: Math.exp,
     log: Math.log, ln: Math.log, log10: Math.log10, floor: Math.floor, ceil: Math.ceil,
     sinc: x => Math.abs(x) < 1e-9 ? 1 : Math.sin(x) / x,
-    min: Math.min, max: Math.max, atan2: Math.atan2, hypot: Math.hypot, pow: Math.pow
+    min: Math.min, max: Math.max, atan2: Math.atan2, hypot: Math.hypot, pow: Math.pow,
+    rmod: (x,y) => x%y
   };
   function compile(source,parameters=['x','y'],locals=Object.create(null)) {
     const clean = (parameters[0]==='x'?source.trim().replace(/^z\s*=\s*/i,''):source.trim()).toLowerCase()
@@ -43,7 +44,7 @@ const SurfaceMath = (() => {
         let second;
         if (tokens[i] === ',') { i++; second = conditional(); }
         if (tokens[i++] !== ')') throw Error('Check the function parentheses.');
-        const binary = ['min','max','atan2','hypot','pow'].includes(t);
+        const binary = ['min','max','atan2','hypot','pow','rmod'].includes(t);
         if (binary !== Boolean(second)) throw Error(t + ' takes ' + (binary ? 'two arguments.' : 'one argument.'));
         return second ? (x,y) => functions[t](first(x,y),second(x,y)) : (x,y) => functions[t](first(x,y));
       }

@@ -113,7 +113,7 @@
     $('parametricHelp').hidden=!p.shape;
     $('exprType').textContent=p.shape?'r(u, v)':'z = f(x, y)';
     $('width').value=100;$('relief').value=p.relief;$('base').value=2;
-    $('resolution').min=p.grid?4:16;$('resolution').max=p.grid?256:128;$('resolution').step=p.grid?1:4;
+    $('resolution').min=p.grid?4:16;$('resolution').max=p.grid?Math.max(256,...p.grid):128;$('resolution').step=p.grid?1:4;
     $('resolution').value=p.grid?Math.max(...p.grid):64;$('construction').value='base';
     domainControls();colorControls();resetStart();resetCamera();refresh(readyMesh);setOptimizer(optimizing);
   }
@@ -195,8 +195,9 @@
     const closed=mesh.periodicU&&mesh.periodicV;
     $('constructionLabel').hidden=Boolean(spec.shape);
     $('shellHint').hidden=!shell;
-    $('twistHint').hidden=!mesh.twisted;
-    $('thicknessLabel').hidden=Boolean(spec.shape)&&closed&&!mesh.twisted;
+    $('twistHint').hidden=!mesh.twisted&&!mesh.collapsedBoundary;
+    $('twistHint').textContent=mesh.twisted?'The surface twists through itself. Export creates a wall with an approximate thickness and fuses the crossing.':'A surface edge meets at a point. Export creates a wall of approximate thickness and joins overlapping regions.';
+    $('thicknessLabel').hidden=Boolean(spec.shape)&&closed&&!mesh.twisted&&!mesh.collapsedBoundary;
     $('base').disabled=$('thicknessLabel').hidden;
     $('thicknessName').textContent=mesh.radialWall?'Radial wall':spec.shape||shell?'Wall thickness':'Base thickness';
     $('widthName').textContent=shell?'Graph XY span':'Longest XY side';

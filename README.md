@@ -12,6 +12,8 @@ Use `if(x < 0, -x, x)` or `x < 0 ? -x : x` in a height equation or a parametric 
 
 The **Klein bottle** preset uses the same piecewise definition as the Origin example. For its reversed seam, the sampler adds one interval when needed to align the two edges. Its STL uses an adjustable wall with a fused crossing, so the exported solid has approximate wall thickness. Check the sliced layers before printing.
 
+The Origin Rose definition imports at its original 25 × 576 samples. Helper calls can appear inside other helpers and coordinate expressions. The editor supports Origin’s signed real remainder, `rmod(x, y)`. At the rose’s center, an entire parameter edge meets at one point. STL export builds a fused wall around the petals and that center.
+
 ## Export a print
 
 To edit a parametric equation, select **Torus**, **Catenoid**, or **Trefoil knot**, then change the expression. Enter an `(x, y, z)` tuple using `u` and `v`. You can define named values on preceding lines. For example, changing `minor = 0.72` to `minor = 1` in Torus thickens the ring. The preview and STL use the edited coordinates. Open parametric sheets have a wall thickness setting in the export dialog.
