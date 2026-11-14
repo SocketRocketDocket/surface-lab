@@ -41,7 +41,7 @@
   function redraw(){cancelAnimationFrame(redrawId);redrawId=requestAnimationFrame(drawMain);}
   function resetCamera(){Object.assign(camera,{az:-.67,el:.43,zoom:1});$('view').value='orbit';redraw();}
   function resetStart() {
-    if(!spec.domain)return;
+    if(spec.shape||!spec.domain)return;
     const [a,b,c,d]=spec.domain;
     for (const [id,min,max] of [['startX',a,b],['startY',c,d]]){
       $(id).min=min;$(id).max=max;$(id).value=Number((min+(max-min)*.67).toPrecision(6));
@@ -104,15 +104,18 @@
   }
   function choose(p){
     presetId=p.id;spec={...p,domain:p.domain?.slice()};color=p.color;
-    $('expression').value=spec.formula;$('expression').readOnly=Boolean(p.shape);
-    $('expression').rows=spec.shape||p.formula.length>55?2:1;
+    $('expression').value=spec.formula;
+    $('expression').rows=p.shape?Math.min(8,Math.max(3,p.formula.split('\n').length+1)):p.formula.length>55?2:1;
+    $('expression').classList.toggle('parametric-expression',Boolean(p.shape));
+    $('parametricHelp').hidden=!p.shape;
     $('exprType').textContent=p.shape?'r(u, v)':'z = f(x, y)';
     $('width').value=100;$('relief').value=p.relief;$('base').value=2;$('resolution').value=64;$('construction').value='base';
     domainControls();colorControls();resetStart();resetCamera();refresh();setOptimizer(optimizing);
   }
   $('expression').oninput=()=>{
     spec.formula=$('expression').value;
-    if(preset()?.formula!==spec.formula)presetId=null;
+    const original=presets.find(p=>p.id===spec.id);
+    presetId=original?.formula===spec.formula?original.id:null;
     refresh();
   };
   $('resolution').oninput=refresh;
@@ -171,11 +174,12 @@
   let savedPrintSettings;
   function showConstructionFields(){
     const shell=!spec.shape&&$('construction').value==='shell';
+    const closed=mesh.periodicU&&mesh.periodicV;
     $('constructionLabel').hidden=Boolean(spec.shape);
     $('shellHint').hidden=!shell;
-    $('thicknessLabel').hidden=Boolean(spec.shape)&&spec.shape!=='catenoid';
+    $('thicknessLabel').hidden=Boolean(spec.shape)&&closed;
     $('base').disabled=$('thicknessLabel').hidden;
-    $('thicknessName').textContent=spec.shape==='catenoid'?'Radial wall':shell?'Wall thickness':'Base thickness';
+    $('thicknessName').textContent=mesh.radialWall?'Radial wall':spec.shape||shell?'Wall thickness':'Base thickness';
     $('widthName').textContent=shell?'Graph XY span':'Longest XY side';
   }
   function updateExport(){

@@ -6,6 +6,8 @@ Choose from 17 presets or enter a height equation such as `sin(x) * cos(y)`. Adj
 
 ## Export a print
 
+To edit a parametric equation, select **Torus**, **Catenoid**, or **Trefoil knot**, then change the expression. Enter an `(x, y, z)` tuple using `u` and `v`. You can define named values on preceding lines. For example, changing `minor = 0.72` to `minor = 1` in Torus thickens the ring. The preview and STL use the edited coordinates. Open parametric sheets have a wall thickness setting in the export dialog.
+
 1. Select **Export STL** and set the XY span and surface relief in millimeters.
 2. For a height graph, choose **Flat base** or **Thickened surface**. A thickened surface follows the graph on both sides and closes at the edges. Set **Wall thickness** to the desired total thickness.
 3. Check **Solid dimensions**, download the STL, and import it into your slicer in millimeters. Curved undersides may need supports.

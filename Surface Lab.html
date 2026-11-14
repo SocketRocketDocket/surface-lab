@@ -17,6 +17,7 @@ dialog{padding:23px;width:min(470px,calc(100% - 30px));max-height:88dvh;overflow
 .print-fields select{display:block;width:100%;margin-top:6px;padding:9px}
 .print-fields #widthName{color:inherit}
 .shell-hint{grid-column:1/-1;font-size:12px;line-height:1.5;color:var(--muted);margin:0}
+.expr-box textarea.parametric-expression{max-height:none}
 </style>
   <script>/* The expression compiler and surface library are also used by the mesh checks. */
 const SurfaceMath = (() => {
@@ -27,8 +28,8 @@ const SurfaceMath = (() => {
     sinc: x => Math.abs(x) < 1e-9 ? 1 : Math.sin(x) / x,
     min: Math.min, max: Math.max, atan2: Math.atan2, hypot: Math.hypot, pow: Math.pow
   };
-  function compile(source) {
-    const clean = source.trim().replace(/^z\s*=\s*/i, '').toLowerCase()
+  function compile(source,parameters=['x','y'],locals=Object.create(null)) {
+    const clean = (parameters[0]==='x'?source.trim().replace(/^z\s*=\s*/i,''):source.trim()).toLowerCase()
       .replaceAll('π','pi').replaceAll('²','^2').replaceAll('³','^3').replaceAll('−','-')
       .replaceAll('×','*').replaceAll('÷','/').replaceAll('**','^');
     if (!clean || clean.length > 650) throw Error('Enter an expression of up to 650 characters.');
@@ -41,9 +42,10 @@ const SurfaceMath = (() => {
         if (tokens[i++] !== ')') throw Error('Add a closing parenthesis.');
         return expr;
       }
-      if (t === 'x') return x => x;
-      if (t === 'y') return (x,y) => y;
-      if (t === 'xy') return (x,y) => x*y;
+      if (t === parameters[0]) return x => x;
+      if (t === parameters[1]) return (x,y) => y;
+      if (t === parameters.join('')) return (x,y) => x*y;
+      if (Object.hasOwn(locals,t)) return () => locals[t];
       if (t === 'pi' || t === 'e') return () => t === 'pi' ? Math.PI : Math.E;
       if (t && /^\d|^\./.test(t) && Number.isFinite(Number(t))) return () => Number(t);
       if (Object.hasOwn(functions,t)) {
@@ -92,18 +94,61 @@ const SurfaceMath = (() => {
     if (i !== tokens.length) throw Error('Check the expression near “' + tokens[i] + '”.');
     return result;
   }
+  function compileParametric(source) {
+    if(source.length>4096) throw Error('Use up to 4096 characters for a parametric surface.');
+    const parameters=['u','v'], locals=Object.create(null), steps=[];
+    let expression=source.trim();
+    // Leading assignments give long formulas readable names. Evaluate each once per sample.
+    const assignment=/^([a-z][a-z0-9]*)\s*=\s*([^;\n]+)(?:;|\n)\s*/i;
+    let match;
+    while((match=expression.match(assignment))){
+      const name=match[1].toLowerCase();
+      if(['u','v','uv','pi','e'].includes(name)||Object.hasOwn(functions,name)||Object.hasOwn(locals,name))
+        throw Error('Choose a different name for “'+name+'”.');
+      const evaluate=compile(match[2],parameters,locals);
+      steps.push({name,evaluate});locals[name]=0;
+      expression=expression.slice(match[0].length).trim();
+    }
+    expression=expression.replace(/^r\s*\(\s*u\s*,\s*v\s*\)\s*=\s*/i,'').trim();
+    if(!expression.startsWith('(')||!expression.endsWith(')'))
+      throw Error('Enter three coordinates as (x, y, z), using u and v.');
+    const tuple=expression.slice(1,-1),parts=[];
+    let start=0,depth=0;
+    for(let i=0;i<tuple.length;i++){
+      if(tuple[i]==='(') depth++;
+      if(tuple[i]===')' && --depth<0) throw Error('Check the coordinate parentheses.');
+      if(tuple[i]===',' && depth===0){parts.push(tuple.slice(start,i));start=i+1;}
+    }
+    parts.push(tuple.slice(start));
+    if(depth!==0 || parts.length!==3 || parts.some(s=>!s.trim()))
+      throw Error('Enter three coordinates as (x, y, z), using u and v.');
+    const coordinates=parts.map((part,k)=>{
+      try{return compile(part,parameters,locals);}
+      catch(err){throw Error('Coordinate '+['x','y','z'][k]+': '+err.message);}
+    });
+    return (u,v)=>{
+      for(const step of steps) locals[step.name]=step.evaluate(u,v);
+      return coordinates.map(evaluate=>evaluate(u,v));
+    };
+  }
   const presets = [];
   function add(id,name,category,formula,domain,color,relief=42,shape=null) {
     presets.push({id,name,category,formula,domain,color,relief,shape});
   }
   add('saddle','Hyperbolic paraboloid','Classics','(x^2 - y^2) / 2',[-2,2,-2,2],'#ab82ff',58);
   add('ripple','Radial ripple','Waveforms','sinc(3 * sqrt(x^2 + y^2))',[-3,3,-3,3],'#57d5c7',35);
-  add('torus','Torus','Parametric','((R + r cos v) cos u, (R + r cos v) sin u, r sin v)',null,'#f4ae77',30,'torus');
+  const tau=2*Math.PI;
+  add('torus','Torus','Parametric','major = 2\nminor = 0.72\n((major + minor*cos(v))*cos(u), (major + minor*cos(v))*sin(u), minor*sin(v))',[0,tau,0,tau],'#f4ae77',30,'torus');
   add('peaks','Peaks','Landscapes','3*(1-x)^2*exp(-x^2-(y+1)^2) - 10*(x/5-x^3-y^5)*exp(-x^2-y^2) - exp(-(x+1)^2-y^2)/3',[-3,3,-3,3],'#7da9ff',55);
-  add('catenoid','Catenoid','Parametric','(cosh(v) cos(u), cosh(v) sin(u), v)',null,'#f38fc0',80,'catenoid');
+  add('catenoid','Catenoid','Parametric','(cosh(v)*cos(u), cosh(v)*sin(u), v)',[0,tau,-1.25,1.25],'#f38fc0',80,'catenoid');
   add('gaussian','Gaussian bell','Classics','exp(-(x^2 + y^2))',[-2,2,-2,2],'#60cfaa',48);
   add('monkey','Monkey saddle','Classics','x^3 - 3*x*y^2',[-1,1,-1,1],'#d094f5',57);
-  add('trefoil','Trefoil knot','Parametric','C(u) = (sin u + 2 sin(2u), cos u - 2 cos(2u), -sin(3u))',null,'#ef9c85',44,'trefoil');
+  add('trefoil','Trefoil knot','Parametric',[
+    'radius = 0.34','cx = sin(u) + 2*sin(2*u)','cy = cos(u) - 2*cos(2*u)','cz = -sin(3*u)',
+    'dx = cos(u) + 4*cos(2*u)','dy = -sin(u) + 4*sin(2*u)','dz = -3*cos(3*u)',
+    'h = hypot(dx,dy)','length = hypot(h,dz)','a = radius*cos(v)','b = radius*sin(v)/length',
+    '(cx + (a*dy - b*dx*dz)/h, cy - (a*dx + b*dy*dz)/h, cz + b*h)'
+  ].join('\n'),[0,tau,0,tau],'#ef9c85',44,'trefoil');
   add('eggcrate','Eggcrate','Waveforms','sin(x)^2 + sin(y)^2',[-4,4,-4,4],'#7ab4ef',25);
   add('paraboloid','Elliptic paraboloid','Classics','x^2 + y^2',[-2,2,-2,2],'#89c9a8',50);
   add('plane','Inclined plane','Classics','0.4*x + 0.2*y',[-2,2,-2,2],'#96a6df',32);
@@ -113,50 +158,47 @@ const SurfaceMath = (() => {
   add('ackley','Ackley','Optimization','-20*exp(-0.2*sqrt((x^2+y^2)/2))-exp((cos(2*pi*x)+cos(2*pi*y))/2)+e+20',[-3,3,-3,3],'#9c92ef',40);
   add('himmelblau','Himmelblau','Optimization','(x^2+y-11)^2 + (x+y^2-7)^2',[-5,5,-5,5],'#e58aa1',55);
   add('booth','Booth','Optimization','(x+2*y-7)^2 + (2*x+y-5)^2',[-5,5,-5,5],'#88bd8e',48);
-  const tau = 2*Math.PI;
   const cross = (a,b) => [a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]];
   const unit = v => { const l=Math.hypot(...v); return v.map(k=>k/l); };
-  function parametric(shape,s,t) {
-    const u=tau*s, v=tau*t, cu=Math.cos(u), su=Math.sin(u);
-    if(shape === 'torus') {
-      const r=2+0.72*Math.cos(v); return [r*cu,r*su,0.72*Math.sin(v)];
-    }
-    if(shape === 'catenoid') {
-      const z=(t*2-1)*1.25, r=Math.cosh(z); return [r*cu,r*su,z];
-    }
-    const center=[su+2*Math.sin(2*u),cu-2*Math.cos(2*u),-Math.sin(3*u)];
-    const tangent=unit([cu+4*Math.cos(2*u),-su+4*Math.sin(2*u),-3*Math.cos(3*u)]);
-    const n=unit(cross(tangent,[0,0,1])), b=cross(n,tangent);
-    return center.map((p,k)=>p+0.34*(n[k]*Math.cos(v)+b[k]*Math.sin(v)));
-  }
-  return {compile,presets,cross,unit,parametric};
+  return {compile,compileParametric,presets,cross,unit};
 })();
 </script><script>const SurfaceGeometry = (() => {
-  const {compile,parametric,cross} = SurfaceMath;
+  const {compile,compileParametric,cross} = SurfaceMath;
   function sample(spec,n) {
     const {shape,domain,formula} = spec;
     if (!Number.isInteger(n) || n<4 || n>256) throw Error('Choose a resolution between 4 and 256.');
-    const periodicU=Boolean(shape), periodicV=shape==='torus'||shape==='trefoil';
-    const columns=n+(periodicU?0:1), rows=n+(periodicV?0:1);
     const vertices=[], faces=[], quads=[];
     const min=[Infinity,Infinity,Infinity],max=[-Infinity,-Infinity,-Infinity];
-    const fn = shape ? null : compile(formula);
-    if (!shape && (!domain || domain.length!==4 || !domain.every(Number.isFinite) || domain[0]>=domain[1] || domain[2]>=domain[3]))
+    const fn = shape ? compileParametric(formula) : compile(formula);
+    if (!domain || domain.length!==4 || !domain.every(Number.isFinite) || domain[0]>=domain[1] || domain[2]>=domain[3])
       throw Error('Each domain maximum must be greater than its minimum.');
-    const at=(i,j)=>(j%rows)*columns+i%columns;
-    for(let j=0;j<rows;j++) for(let i=0;i<columns;i++) {
-      const x=shape?0:domain[0]+(domain[1]-domain[0])*i/n;
-      const y=shape?0:domain[2]+(domain[3]-domain[2])*j/n;
-      const p=shape?parametric(shape,i/n,j/n):[x,y,fn(x,y)];
-      if (!p.every(Number.isFinite)) throw Error('Undefined surface at x = '+x.toFixed(3)+', y = '+y.toFixed(3)+'. Adjust the equation or domain.');
+    for(let j=0;j<=n;j++) for(let i=0;i<=n;i++) {
+      const x=domain[0]+(domain[1]-domain[0])*i/n;
+      const y=domain[2]+(domain[3]-domain[2])*j/n;
+      const p=shape?fn(x,y):[x,y,fn(x,y)];
+      if (!p.every(Number.isFinite)) throw Error('Undefined surface at '+(shape?'u':'x')+' = '+x.toFixed(3)+', '+(shape?'v':'y')+' = '+y.toFixed(3)+'. Adjust the equation or domain.');
       vertices.push(p);
       for(let k=0;k<3;k++){min[k]=Math.min(min[k],p[k]); max[k]=Math.max(max[k],p[k]);}
     }
+    const stride=n+1;
+    const tolerance=Math.max(...max.map((v,k)=>v-min[k]))*1e-9;
+    const coincides=(a,b)=>vertices[a].every((v,k)=>Math.abs(v-vertices[b][k])<=tolerance);
+    const indices=Array.from({length:stride},(_,i)=>i);
+    const periodicU=Boolean(shape)&&indices.every(j=>coincides(j*stride,j*stride+n));
+    const periodicV=Boolean(shape)&&indices.every(i=>coincides(i,n*stride+i));
+    const columns=n+(periodicU?0:1), rows=n+(periodicV?0:1);
+    if(periodicU||periodicV){
+      for(let j=0;j<rows;j++) for(let i=0;i<columns;i++) vertices[j*columns+i]=vertices[j*stride+i];
+      vertices.length=rows*columns;
+    }
+    const at=(i,j)=>(j%rows)*columns+i%columns;
     for(let j=0;j<n;j++) for(let i=0;i<n;i++) {
       const a=at(i,j), b=at(i+1,j), c=at(i+1,j+1), d=at(i,j+1);
       quads.push([a,b,c,d]); faces.push([a,b,c],[a,c,d]);
     }
-    return {vertices,faces,quads,min,max,n,at,columns,rows,shape};
+    // An edited equation may open or close a seam independently of its starting preset.
+    const radialWall=shape==='catenoid' && formula===SurfaceMath.presets.find(p=>p.id==='catenoid').formula;
+    return {vertices,faces,quads,min,max,n,at,columns,rows,shape,periodicU,periodicV,radialWall};
   }
   // Fit X and Y with one scale factor. Relief is independently specified in mm.
   function transform(mesh,width,relief) {
@@ -165,7 +207,7 @@ const SurfaceMath = (() => {
     const zScale=span[2] ? relief/span[2] : 0;
     return ([x,y,z])=>[(x-(mesh.min[0]+span[0]/2))*scale,(y-(mesh.min[1]+span[1]/2))*scale,(z-mesh.min[2])*zScale];
   }
-  function surfaceShell(points,triangles,ring,thickness) {
+  function surfaceShell(points,triangles,boundary,thickness,heightGraph) {
     // Accumulate area-weighted normals after scaling into physical millimeters.
     const normals=points.map(()=>[0,0,0]);
     for(const triangle of triangles) {
@@ -180,21 +222,21 @@ const SurfaceMath = (() => {
       const offset=direction.map(v=>v*thickness/2);
       vertices[i]=points[i].map((v,k)=>v+offset[k]);
       vertices[count+i]=points[i].map((v,k)=>v-offset[k]);
-      lowest=Math.min(lowest,vertices[count+i][2]);
+      lowest=Math.min(lowest,vertices[i][2],vertices[count+i][2]);
     }
     for(const p of vertices) p[2]-=lowest;
     const faces=triangles.slice();
     for(const [a,b,c] of triangles) {
-      // Both offset sheets must still be height graphs at this sampling density.
+      const original=heightGraph?null:cross(points[b].map((v,k)=>v-points[a][k]),points[c].map((v,k)=>v-points[a][k]));
       for(const layer of [0,count]) {
         const p=vertices[layer+a],q=vertices[layer+b],r=vertices[layer+c];
-        const areaXY=(q[0]-p[0])*(r[1]-p[1])-(q[1]-p[1])*(r[0]-p[0]);
-        if(!(areaXY>0)) throw Error('The wall folds over at this thickness. Reduce wall thickness or surface relief, or increase the XY span.');
+        const normal=cross(q.map((v,k)=>v-p[k]),r.map((v,k)=>v-p[k]));
+        const oriented=heightGraph?normal[2]:normal.reduce((s,v,k)=>s+v*original[k],0);
+        if(!(oriented>0)) throw Error('A wall face folds or collapses. Check the equation, reduce wall thickness or adjust the print dimensions.');
       }
       faces.push([a+count,c+count,b+count]);
     }
-    for(let i=0;i<ring.length;i++) {
-      const a=ring[i],b=ring[(i+1)%ring.length];
+    for(const [a,b] of boundary) {
       faces.push([b,a,a+count],[b,a+count,b+count]);
     }
     return {vertices,faces,surfaceLift:-lowest};
@@ -210,7 +252,7 @@ const SurfaceMath = (() => {
       for(let j=0;j<n;j++)ring.push(at(n,j));
       for(let i=n;i>0;i--)ring.push(at(i,n));
       for(let j=n;j>0;j--)ring.push(at(0,j));
-      if(construction==='shell') return surfaceShell(vertices,mesh.faces,ring,thickness);
+      if(construction==='shell') return surfaceShell(vertices,mesh.faces,ring.map((a,i)=>[a,ring[(i+1)%ring.length]]),thickness,true);
       for(const p of vertices) p[2]+=thickness;
       // A single fan seals the flat base with identical edge vertices on each rim.
       const bottom=vertices.length;
@@ -221,7 +263,7 @@ const SurfaceMath = (() => {
         bridge(ring[next],ring[k],bottom+k,bottom+next);
         faces.push([center,bottom+next,bottom+k]);
       }
-    } else if(shape==='catenoid') {
+    } else if(mesh.radialWall) {
       const count=vertices.length;
       for(let i=0;i<count;i++){
         const [x,y,z]=vertices[i],r=Math.hypot(x,y);
@@ -233,6 +275,21 @@ const SurfaceMath = (() => {
         const a=at(i,0),b=at(i+1,0),c=at(i,n),d=at(i+1,n);
         bridge(b,a,a+count,b+count); bridge(c,d,d+count,c+count);
       }
+    } else if(!mesh.periodicU || !mesh.periodicV) {
+      const boundary=[];
+      for(let i=0;i<n;i++){
+        if(!mesh.periodicU) boundary.push([at(n,i),at(n,i+1)],[at(0,i+1),at(0,i)]);
+        if(!mesh.periodicV) boundary.push([at(i,0),at(i+1,0)],[at(i+1,n),at(i,n)]);
+      }
+      return surfaceShell(vertices,mesh.faces,boundary,thickness,false);
+    } else {
+      // Reversing either parameter reverses the surface winding.
+      let volume6=0;
+      for(const [i,j,k] of faces){
+        const a=vertices[i],normal=cross(vertices[j],vertices[k]);
+        volume6+=a[0]*normal[0]+a[1]*normal[1]+a[2]*normal[2];
+      }
+      if(volume6<0) return {vertices,faces:faces.map(([a,b,c])=>[a,c,b])};
     }
     return {vertices,faces};
   }
@@ -456,7 +513,7 @@ const SurfaceMath = (() => {
   function redraw(){cancelAnimationFrame(redrawId);redrawId=requestAnimationFrame(drawMain);}
   function resetCamera(){Object.assign(camera,{az:-.67,el:.43,zoom:1});$('view').value='orbit';redraw();}
   function resetStart() {
-    if(!spec.domain)return;
+    if(spec.shape||!spec.domain)return;
     const [a,b,c,d]=spec.domain;
     for (const [id,min,max] of [['startX',a,b],['startY',c,d]]){
       $(id).min=min;$(id).max=max;$(id).value=Number((min+(max-min)*.67).toPrecision(6));
@@ -519,15 +576,18 @@ const SurfaceMath = (() => {
   }
   function choose(p){
     presetId=p.id;spec={...p,domain:p.domain?.slice()};color=p.color;
-    $('expression').value=spec.formula;$('expression').readOnly=Boolean(p.shape);
-    $('expression').rows=spec.shape||p.formula.length>55?2:1;
+    $('expression').value=spec.formula;
+    $('expression').rows=p.shape?Math.min(8,Math.max(3,p.formula.split('\n').length+1)):p.formula.length>55?2:1;
+    $('expression').classList.toggle('parametric-expression',Boolean(p.shape));
+    $('parametricHelp').hidden=!p.shape;
     $('exprType').textContent=p.shape?'r(u, v)':'z = f(x, y)';
     $('width').value=100;$('relief').value=p.relief;$('base').value=2;$('resolution').value=64;$('construction').value='base';
     domainControls();colorControls();resetStart();resetCamera();refresh();setOptimizer(optimizing);
   }
   $('expression').oninput=()=>{
     spec.formula=$('expression').value;
-    if(preset()?.formula!==spec.formula)presetId=null;
+    const original=presets.find(p=>p.id===spec.id);
+    presetId=original?.formula===spec.formula?original.id:null;
     refresh();
   };
   $('resolution').oninput=refresh;
@@ -586,11 +646,12 @@ const SurfaceMath = (() => {
   let savedPrintSettings;
   function showConstructionFields(){
     const shell=!spec.shape&&$('construction').value==='shell';
+    const closed=mesh.periodicU&&mesh.periodicV;
     $('constructionLabel').hidden=Boolean(spec.shape);
     $('shellHint').hidden=!shell;
-    $('thicknessLabel').hidden=Boolean(spec.shape)&&spec.shape!=='catenoid';
+    $('thicknessLabel').hidden=Boolean(spec.shape)&&closed;
     $('base').disabled=$('thicknessLabel').hidden;
-    $('thicknessName').textContent=spec.shape==='catenoid'?'Radial wall':shell?'Wall thickness':'Base thickness';
+    $('thicknessName').textContent=mesh.radialWall?'Radial wall':spec.shape||shell?'Wall thickness':'Base thickness';
     $('widthName').textContent=shell?'Graph XY span':'Longest XY side';
   }
   function updateExport(){
@@ -682,7 +743,8 @@ const SurfaceMath = (() => {
     <aside class="panel controls"><div class="panel-heading"><h2 id="controlsTitle"><i data-icon="sliders"></i>Surface controls</h2><button class="icon-btn" id="resetControls" aria-label="Restore preset defaults" title="Restore preset defaults"><i data-icon="reset"></i></button></div>
       <div class="control-content" id="editorPane">
         <label class="field-title" for="expression">Expression <span class="muted mono" id="exprType">z = f(x, y)</span></label>
-        <div class="expr-box"><span class="fx">ƒ</span><textarea id="expression" spellcheck="false" aria-describedby="error"></textarea></div>
+        <div class="expr-box"><span class="fx">ƒ</span><textarea id="expression" spellcheck="false" aria-describedby="parametricHelp error"></textarea></div>
+        <p id="parametricHelp" class="param-note" hidden>Edit the (x, y, z) coordinates using u and v. You can define values on lines above the tuple.</p>
         <div class="control-section"><div class="field-title">Domain <span class="muted mini-label" id="domainHint">MIN / MAX</span></div><div id="domainInputs"></div></div>
         <div class="control-section"><label class="field-title" for="resolution">Mesh resolution <output id="resValue" class="value-chip"></output></label><input type="range" id="resolution" min="16" max="128" step="4" value="64"><div class="range-ends"><span>Coarse</span><span>Fine</span></div></div>
         <div class="control-section color-row"><span class="field-title">Surface color</span><div class="swatches" id="swatches" role="group" aria-label="Surface color"></div></div>
@@ -714,6 +776,7 @@ const SurfaceMath = (() => {
   </form></dialog>
 <dialog id="guideDialog"><div class="dialog-heading"><h2>Quick guide</h2><button class="close icon-btn" aria-label="Close guide"><i data-icon="close"></i></button></div><div class="guide-copy">
   <h3>Build a surface</h3><p>Choose a preset or enter a height equation in x and y. Try <code>cos(x) * sin(y)</code>. Choose a domain where the expression is finite and continuous. Changes update the preview automatically. Use ^ for powers, pi for π, and radians for angles.</p>
+  <p>For a parametric surface, open Torus, Catenoid or Trefoil knot and edit the coordinate tuple in the expression field. On the torus, try changing <code>minor = 0.72</code> to <code>minor = 1</code> to thicken its ring. A tuple may also start with <code>r(u,v) =</code>. Matching domain edges join at a seam. Open sheets use the wall thickness in Export STL.</p>
   <details><summary>Supported functions</summary><p>sin, cos, tan, asin, acos, atan, sinh, cosh, tanh, exp, log (natural), log10, sqrt, abs, floor, ceil, sinc, min, max, pow, hypot and atan2. The last five take two arguments. sinc(0) is 1.</p></details>
   <h3>Explore the mesh</h3><p>Drag to orbit or scroll to zoom. Focus the preview and use arrow keys or + and − for keyboard control. Wireframe shows sampling density. Print mesh shows the solid geometry.</p>
   <h3>Find an extremum</h3><p>In Optimizer, choose a method and starting point. Gradient descent follows the local slope, Nelder–Mead moves a triangle, and grid search refines the best sampled region. Results are bounded numerical estimates. <a href="https://www.sfu.ca/~ssurjano/optimization.html" target="_blank" rel="noreferrer">Optimization test functions ↗</a></p>
