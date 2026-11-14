@@ -5,7 +5,7 @@
   <meta name="theme-color" content="#111313"><meta name="description" content="Explore mathematical surfaces, edit equations, run numerical optimizers, and export solid STL meshes.">
   <title>Surface Lab — Surface studio</title>
   <link rel="icon" href="mark.svg" type="image/svg+xml"><link rel="stylesheet" href="style.css">
-  <script defer src="math.js"></script><script defer src="mesh.js"></script><script defer src="optimizer.js"></script><script defer src="renderer.js"></script><script defer src="app.js"></script>
+  <script defer src="math.js"></script><script defer src="origin.js"></script><script defer src="wall.js"></script><script defer src="mesh.js"></script><script defer src="optimizer.js"></script><script defer src="renderer.js"></script><script defer src="app.js"></script>
 </head>
 <body>
 <header class="topbar"><div class="header-inner">
@@ -15,8 +15,9 @@
 </div></header>
 <main>
   <section class="page-heading"><div><h1>Surface studio</h1><p>Shape mathematical expressions into printable 3D meshes.</p></div>
-    <button id="exportButton" class="primary"><i data-icon="download"></i>Export STL</button>
+    <div class="file-actions"><button id="importButton" class="browse">Import Origin file</button><input id="originFile" type="file" accept=".ofp,.xml" hidden><button id="exportButton" class="primary"><i data-icon="download"></i>Export STL</button></div>
   </section>
+  <p id="importError" class="error" role="alert" hidden></p>
   <div class="workspace">
     <section class="panel viewport" id="viewport">
       <div class="panel-heading"><h2><i data-icon="cube"></i>Surface preview</h2>
@@ -57,6 +58,7 @@
     <div class="print-fields"><label id="constructionLabel">Mesh style<select id="construction"><option value="base">Flat base</option><option value="shell">Thickened surface</option></select></label>
     <label id="thicknessLabel"><span id="thicknessName">Base thickness</span> <span>(mm)</span><input type="number" id="base" min="0.1" max="100" step="any" required value="2"></label>
     <p id="shellHint" class="shell-hint" hidden>The wall follows both sides of the graph and closes at the edges. Solid dimensions include the wall.</p>
+    <p id="twistHint" class="shell-hint" hidden>The surface twists through itself. Export creates a wall with an approximate thickness and fuses the crossing.</p>
     <label><span id="widthName">Longest XY side</span> <span>(mm)</span><input type="number" id="width" min="5" max="1000" step="any" required value="100"></label>
     <label>Surface relief <span>(mm)</span><input type="number" id="relief" min="0.1" max="1000" step="any" required value="58"></label>
     </div>
@@ -67,6 +69,7 @@
   <h3>Build a surface</h3><p>Choose a preset or enter a height equation in x and y. Try <code>cos(x) * sin(y)</code>. Choose a domain where the expression is finite and continuous. Changes update the preview automatically. Use ^ for powers, pi for π, and radians for angles.</p>
   <p>For a parametric surface, open Torus, Catenoid or Trefoil knot and edit the coordinate tuple in the expression field. On the torus, try changing <code>minor = 0.72</code> to <code>minor = 1</code> to thicken its ring. A tuple may also start with <code>r(u,v) =</code>. Matching domain edges join at a seam. Open sheets use the wall thickness in Export STL.</p>
   <details><summary>Supported functions</summary><p>sin, cos, tan, asin, acos, atan, sinh, cosh, tanh, exp, log (natural), log10, sqrt, abs, floor, ceil, sinc, min, max, pow, hypot and atan2. The last five take two arguments. sinc(0) is 1.</p></details>
+  <h3>Piecewise and Origin formulas</h3><p>Use <code>if(x &lt; 0, -x, x)</code> or <code>x &lt; 0 ? -x : x</code> in a height or coordinate expression. Nest conditions for additional branches. Combine comparisons with <code>&amp;&amp;</code>, <code>||</code> and <code>!</code>.</p><p>Choose <b>Import Origin file</b> to load a 3D parametric Settings definition (.ofp or .xml). Surface Lab translates numeric declarations and coordinate helpers with return and if/else branches. Edit the translated tuple or find Klein bottle in the preset library.</p>
   <h3>Explore the mesh</h3><p>Drag to orbit or scroll to zoom. Focus the preview and use arrow keys or + and − for keyboard control. Wireframe shows sampling density. Print mesh shows the solid geometry.</p>
   <h3>Find an extremum</h3><p>In Optimizer, choose a method and starting point. Gradient descent follows the local slope, Nelder–Mead moves a triangle, and grid search refines the best sampled region. Results are bounded numerical estimates. <a href="https://www.sfu.ca/~ssurjano/optimization.html" target="_blank" rel="noreferrer">Optimization test functions ↗</a></p>
   <h3>Prepare a print</h3><p>For a height graph, open Export STL and choose Flat base or Thickened surface. A thickened surface adds half the wall thickness to each side along the local normal, then joins the edges. The XY span and relief set the size of the original graph. Check Solid dimensions for the final size. The catenoid uses a radial wall, and closed parametric shapes export as solids. Import the STL in millimeters and check orientation and supports in your slicer.</p>

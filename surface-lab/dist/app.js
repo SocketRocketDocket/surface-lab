@@ -24,8 +24,8 @@
   const integer=v=>new Intl.NumberFormat('en-US').format(v);
   const value=id=>$(id).valueAsNumber;
   const config=()=>({width:value('width'),relief:value('relief'),base:value('base'),construction:$('construction').value});
-  const preset=()=>presets.find(p=>p.id===presetId);
-  function name(){return preset()?.name||'Custom surface';}
+  let originalPreset,importVersion=0;
+  function name(){return presetId?originalPreset.name:'Custom surface';}
   function toast(message){$('toast').textContent=message;$('toast').classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toast').classList.remove('show'),2600);}
   function fieldError(id,message){$(id).textContent=message||'';$(id).hidden=!message;}
   function meshSolid(){const c=config();return solid(mesh,c.width,c.relief,c.base,c.construction);}
@@ -68,23 +68,24 @@
   }
   function domainControls(){
     $('domainInputs').replaceChildren();
-    $('domainHint').textContent=spec.shape?'PARAMETERS':'MIN / MAX';
-    if(spec.shape){
-      const p=document.createElement('p');p.className='param-note';
-      p.textContent=spec.shape==='catenoid'?'u ∈ [0, 2π]   ·   v ∈ [−1.25, 1.25]':'u, v ∈ [0, 2π]';
-      $('domainInputs').append(p);return;
-    }
-    for(const [idx,axis] of ['x','y'].entries()){
+    $('domainHint').textContent='MIN / MAX';
+    for(const [idx,axis] of (spec.shape?['u','v']:['x','y']).entries()){
       const row=document.createElement('div');row.className='number-pair';
       row.innerHTML='<span>'+axis+'</span><input type="number" step="any" aria-label="'+axis.toUpperCase()+' minimum"><span class="to">→</span><input type="number" step="any" aria-label="'+axis.toUpperCase()+' maximum">';
       [...row.querySelectorAll('input')].forEach((input,k)=>{input.value=spec.domain[idx*2+k];input.oninput=()=>{spec.domain[idx*2+k]=input.valueAsNumber;refresh();if(valid)resetStart();};});
       $('domainInputs').append(row);
     }
   }
-  function refresh(){
+  function sampling(){
+    const density=value('resolution');
+    if(!spec.grid)return [density,density];
+    const max=Math.max(...spec.grid);
+    return spec.grid.map(n=>Math.max(4,Math.round(n*density/max)));
+  }
+  function refresh(readyMesh){
     clearResult();valid=false;
     try{
-      mesh=sample(spec,value('resolution'));
+      mesh=readyMesh??sample(spec,...sampling());
       fn=spec.shape?null:compile(spec.formula);valid=true;
       $('expression').setAttribute('aria-invalid','false');
       refreshPrintMesh();
@@ -93,8 +94,9 @@
       $('faceCount').textContent='Last valid preview';
     }
     $('exportButton').disabled=!valid;$('runOpt').disabled=!valid||Boolean(spec.shape);
-    $('resValue').textContent=$('resolution').value+' × '+$('resolution').value;
-    $('resolution').style.setProperty('--fill',((value('resolution')-16)/112*100)+'%');
+    const sizes=valid?[mesh.n,mesh.nv]:sampling();
+    $('resValue').textContent=sizes.join(' × ');
+    $('resolution').style.setProperty('--fill',((value('resolution')-Number($('resolution').min))/(Number($('resolution').max)-Number($('resolution').min))*100)+'%');
     updateTitle();redraw();
   }
   function refreshPrintMesh(){
@@ -102,24 +104,40 @@
     catch(err){printMesh=null;fieldError('error',err.message+' Open Export STL to adjust the settings.');}
     updateFaceCount();
   }
-  function choose(p){
+  function choose(p,readyMesh){
+    originalPreset=p;importVersion++;fieldError('importError','');
     presetId=p.id;spec={...p,domain:p.domain?.slice()};color=p.color;
     $('expression').value=spec.formula;
     $('expression').rows=p.shape?Math.min(8,Math.max(3,p.formula.split('\n').length+1)):p.formula.length>55?2:1;
     $('expression').classList.toggle('parametric-expression',Boolean(p.shape));
     $('parametricHelp').hidden=!p.shape;
     $('exprType').textContent=p.shape?'r(u, v)':'z = f(x, y)';
-    $('width').value=100;$('relief').value=p.relief;$('base').value=2;$('resolution').value=64;$('construction').value='base';
-    domainControls();colorControls();resetStart();resetCamera();refresh();setOptimizer(optimizing);
+    $('width').value=100;$('relief').value=p.relief;$('base').value=2;
+    $('resolution').min=p.grid?4:16;$('resolution').max=p.grid?256:128;$('resolution').step=p.grid?1:4;
+    $('resolution').value=p.grid?Math.max(...p.grid):64;$('construction').value='base';
+    domainControls();colorControls();resetStart();resetCamera();refresh(readyMesh);setOptimizer(optimizing);
   }
   $('expression').oninput=()=>{
     spec.formula=$('expression').value;
-    const original=presets.find(p=>p.id===spec.id);
-    presetId=original?.formula===spec.formula?original.id:null;
+    presetId=originalPreset.formula===spec.formula?originalPreset.id:null;
     refresh();
   };
-  $('resolution').oninput=refresh;
-  $('resetControls').onclick=()=>{choose(presets.find(p=>p.id===spec.id)||presets[0]);toast('Preset defaults restored');};
+  $('resolution').oninput=()=>refresh();
+  $('resetControls').onclick=()=>{choose(originalPreset);toast('Surface defaults restored');};
+  $('importButton').onclick=()=>$('originFile').click();
+  $('originFile').onchange=async()=>{
+    const file=$('originFile').files[0];if(!file)return;
+    const ticket=++importVersion;$('originFile').value='';
+    try{
+      if(file.size>262144)throw Error('Choose a definition smaller than 256 KiB.');
+      const bytes=new Uint8Array(await file.arrayBuffer());
+      const encoding=bytes[0]===255&&bytes[1]===254?'utf-16le':bytes[0]===254&&bytes[1]===255?'utf-16be':'utf-8';
+      if(ticket!==importVersion)return;
+      const imported=SurfaceOrigin.parse(new TextDecoder(encoding,{fatal:true}).decode(bytes),file.name);
+      const sampled=sample(imported,...imported.grid);
+      optimizing=false;choose(imported,sampled);toast('Imported '+imported.name);
+    }catch(err){if(ticket===importVersion)fieldError('importError','Import failed. '+err.message);}
+  };
   function setOptimizer(active){
     optimizing=active;$('studioNav').classList.toggle('active',!active);$('optimizerNav').classList.toggle('active',active);
     $('editorPane').hidden=active;$('optimizerPane').hidden=!active;
@@ -177,7 +195,8 @@
     const closed=mesh.periodicU&&mesh.periodicV;
     $('constructionLabel').hidden=Boolean(spec.shape);
     $('shellHint').hidden=!shell;
-    $('thicknessLabel').hidden=Boolean(spec.shape)&&closed;
+    $('twistHint').hidden=!mesh.twisted;
+    $('thicknessLabel').hidden=Boolean(spec.shape)&&closed&&!mesh.twisted;
     $('base').disabled=$('thicknessLabel').hidden;
     $('thicknessName').textContent=mesh.radialWall?'Radial wall':spec.shape||shell?'Wall thickness':'Base thickness';
     $('widthName').textContent=shell?'Graph XY span':'Longest XY side';

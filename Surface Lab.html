@@ -18,6 +18,8 @@ dialog{padding:23px;width:min(470px,calc(100% - 30px));max-height:88dvh;overflow
 .print-fields #widthName{color:inherit}
 .shell-hint{grid-column:1/-1;font-size:12px;line-height:1.5;color:var(--muted);margin:0}
 .expr-box textarea.parametric-expression{max-height:none}
+.file-actions{display:flex;gap:8px;align-items:center}.file-actions button{white-space:nowrap}#importError{margin:-6px 0 12px}
+@media(max-width:560px){.page-heading:has(.file-actions){flex-wrap:wrap}.file-actions{flex-wrap:wrap}}
 </style>
   <script>/* The expression compiler and surface library are also used by the mesh checks. */
 const SurfaceMath = (() => {
@@ -32,27 +34,37 @@ const SurfaceMath = (() => {
     const clean = (parameters[0]==='x'?source.trim().replace(/^z\s*=\s*/i,''):source.trim()).toLowerCase()
       .replaceAll('π','pi').replaceAll('²','^2').replaceAll('³','^3').replaceAll('−','-')
       .replaceAll('×','*').replaceAll('÷','/').replaceAll('**','^');
-    if (!clean || clean.length > 650) throw Error('Enter an expression of up to 650 characters.');
-    const tokens = clean.match(/(?:\d*\.\d+|\d+\.?\d*)(?:e[+-]?\d+)?|[a-z][a-z0-9]*|[^\s]/g) || [];
+    if (!clean || clean.length > 8192) throw Error('Enter an expression of up to 8192 characters.');
+    const tokens = clean.match(/(?:\d*\.\d+|\d+\.?\d*)(?:e[+-]?\d+)?|[a-z_][a-z0-9_]*|<=|>=|==|!=|&&|\|\||[^\s]/g) || [];
     let i = 0;
     function atom() {
       const t = tokens[i++];
       if (t === '(') {
-        const expr = sum();
+        const expr = conditional();
         if (tokens[i++] !== ')') throw Error('Add a closing parenthesis.');
         return expr;
       }
-      if (t === parameters[0]) return x => x;
-      if (t === parameters[1]) return (x,y) => y;
+      if (t && t === parameters[0]) return x => x;
+      if (t && t === parameters[1]) return (x,y) => y;
       if (t === parameters.join('')) return (x,y) => x*y;
       if (Object.hasOwn(locals,t)) return () => locals[t];
       if (t === 'pi' || t === 'e') return () => t === 'pi' ? Math.PI : Math.E;
       if (t && /^\d|^\./.test(t) && Number.isFinite(Number(t))) return () => Number(t);
+      if (t==='if' || t==='piecewise') {
+        if(tokens[i++]!=='(') throw Error('Use if(condition, true value, false value).');
+        const test=conditional();
+        if(tokens[i++]!==',') throw Error('Add the true and false values to the conditional.');
+        const yes=conditional();
+        if(tokens[i++]!==',') throw Error('Add a false value to the conditional.');
+        const no=conditional();
+        if(tokens[i++]!==')') throw Error('Check the conditional parentheses.');
+        return (x,y)=>test(x,y)?yes(x,y):no(x,y);
+      }
       if (Object.hasOwn(functions,t)) {
         if (tokens[i++] !== '(') throw Error('Use parentheses around function arguments.');
-        const first = sum();
+        const first = conditional();
         let second;
-        if (tokens[i] === ',') { i++; second = sum(); }
+        if (tokens[i] === ',') { i++; second = conditional(); }
         if (tokens[i++] !== ')') throw Error('Check the function parentheses.');
         const binary = ['min','max','atan2','hypot','pow'].includes(t);
         if (binary !== Boolean(second)) throw Error(t + ' takes ' + (binary ? 'two arguments.' : 'one argument.'));
@@ -68,6 +80,7 @@ const SurfaceMath = (() => {
     function unary() {
       if (tokens[i] === '-') { i++; const a = unary(); return (x,y) => -a(x,y); }
       if (tokens[i] === '+') { i++; return unary(); }
+      if (tokens[i] === '!') { i++; const a=unary(); return (x,y)=>Number(!a(x,y)); }
       return power();
     }
     function product() {
@@ -90,12 +103,37 @@ const SurfaceMath = (() => {
       }
       return expr;
     }
-    const result = sum();
+    const relations={'<':(a,b)=>a<b,'>':(a,b)=>a>b,'<=':(a,b)=>a<=b,'>=':(a,b)=>a>=b};
+    const equality={'==':(a,b)=>a===b,'!=':(a,b)=>a!==b};
+    function compare(next,operations){
+      let expr=next();
+      while(Object.hasOwn(operations,tokens[i])){
+        const op=operations[tokens[i++]],left=expr,right=next();
+        expr=(x,y)=>Number(op(left(x,y),right(x,y)));
+      }
+      return expr;
+    }
+    const relational=()=>compare(sum,relations);
+    const equal=()=>compare(relational,equality);
+    function and(){
+      let expr=equal();
+      while(tokens[i]==='&&'){i++;const left=expr,right=equal();expr=(x,y)=>Number(Boolean(left(x,y)&&right(x,y)));}
+      return expr;
+    }
+    function conditional(){
+      let test=and();
+      while(tokens[i]==='||'){i++;const left=test,right=and();test=(x,y)=>Number(Boolean(left(x,y)||right(x,y)));}
+      if(tokens[i]!=='?') return test;
+      i++;const yes=conditional();
+      if(tokens[i++]!==':') throw Error('Add a colon and a false value after the question mark.');
+      const no=conditional();return (x,y)=>test(x,y)?yes(x,y):no(x,y);
+    }
+    const result = conditional();
     if (i !== tokens.length) throw Error('Check the expression near “' + tokens[i] + '”.');
     return result;
   }
   function compileParametric(source) {
-    if(source.length>4096) throw Error('Use up to 4096 characters for a parametric surface.');
+    if(source.length>24576) throw Error('Use up to 24576 characters for a parametric surface.');
     const parameters=['u','v'], locals=Object.create(null), steps=[];
     let expression=source.trim();
     // Leading assignments give long formulas readable names. Evaluate each once per sample.
@@ -103,7 +141,7 @@ const SurfaceMath = (() => {
     let match;
     while((match=expression.match(assignment))){
       const name=match[1].toLowerCase();
-      if(['u','v','uv','pi','e'].includes(name)||Object.hasOwn(functions,name)||Object.hasOwn(locals,name))
+      if(['u','v','uv','pi','e','if','piecewise'].includes(name)||Object.hasOwn(functions,name)||Object.hasOwn(locals,name))
         throw Error('Choose a different name for “'+name+'”.');
       const evaluate=compile(match[2],parameters,locals);
       steps.push({name,evaluate});locals[name]=0;
@@ -158,23 +196,219 @@ const SurfaceMath = (() => {
   add('ackley','Ackley','Optimization','-20*exp(-0.2*sqrt((x^2+y^2)/2))-exp((cos(2*pi*x)+cos(2*pi*y))/2)+e+20',[-3,3,-3,3],'#9c92ef',40);
   add('himmelblau','Himmelblau','Optimization','(x^2+y-11)^2 + (x+y^2-7)^2',[-5,5,-5,5],'#e58aa1',55);
   add('booth','Booth','Optimization','(x+2*y-7)^2 + (2*x+y-5)^2',[-5,5,-5,5],'#88bd8e',48);
+  add('klein','Klein bottle','Parametric',[
+    'radius = 4*(1-cos(u)/2)','first = u >= 0 && u < pi',
+    'cx = 6*cos(u)*(1+sin(u))','cy = 16*sin(u)',
+    '(cx + if(first, radius*cos(u)*cos(v), radius*cos(v+pi)), cy + if(first, radius*sin(u)*cos(v), 0), radius*sin(v))'
+  ].join('\n'),[0,tau,0,tau],'#79baca',40,'parametric');
   const cross = (a,b) => [a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]];
   const unit = v => { const l=Math.hypot(...v); return v.map(k=>k/l); };
   return {compile,compileParametric,presets,cross,unit};
 })();
+</script><script>// Translate the mathematical subset of Origin's Settings XML into the editable tuple syntax.
+const SurfaceOrigin = (() => {
+  const id='[a-zA-Z_][a-zA-Z0-9_]*';
+  const identifier=new RegExp('^'+id+'$');
+  const replaceNames=(text,names)=>text.replace(/[a-zA-Z_][a-zA-Z0-9_]*/g,key=>names.get(key.toLowerCase())??key);
+
+  function translate(script,coordinates,parameters){
+    let rest=script.replace(/\/\*[\s\S]*?\*\//g,' ').replace(/\/\/[^\r\n]*/g,' ').trim();
+    const globals=new Map(), helpers=new Map(), lines=[];
+    const head=new RegExp('^function\\s+double\\s+('+id+')\\s*\\(([^()]*)\\)\\s*','i');
+    const declaration=new RegExp('^double\\s+('+id+')\\s*=\\s*([^;{}]+);\\s*','i');
+    const binding=(expression)=>{const name='local'+(lines.length+1);lines.push(name+' = '+expression.trim().replace(/\s+/g,' '));return name;};
+    function take(pattern,error){
+      const m=rest.match(pattern);
+      if(!m) throw Error(error);
+      rest=rest.slice(m[0].length).trimStart();return m;
+    }
+    function group(){
+      if(rest[0]!=='(') throw Error('Expected a condition in parentheses.');
+      let depth=1,i=1;
+      while(i<rest.length&&depth){if(rest[i]==='(') depth++;if(rest[i]===')') depth--;i++;}
+      if(depth) throw Error('Unclosed condition in Origin helper.');
+      const expr=rest.slice(1,i-1);rest=rest.slice(i).trimStart();return expr;
+    }
+    function returned(depth=0){
+      if(depth>24) throw Error('Origin helper branches are too deeply nested.');
+      if(rest.startsWith('{')){
+        rest=rest.slice(1).trimStart();const expr=returned(depth+1);
+        take(/^\}/,'Expected a closing brace after the return.');return expr;
+      }
+      if(/^if\b/i.test(rest)){
+        take(/^if\b/i);const test=group(),yes=returned(depth+1);
+        // A return following an if-return is its implicit else branch.
+        if(/^else\b/i.test(rest))take(/^else\b/i);
+        return 'if('+test+', '+yes+', '+returned(depth+1)+')';
+      }
+      return take(/^return\s+([^;{}]+);/i,'Expected return or if/else in the Origin helper.')[1];
+    }
+    while(rest){
+      if(head.test(rest)){
+        const [,name,args]=take(head),key=name.toLowerCase();
+        if(helpers.has(key)) throw Error('Duplicate Origin helper '+name+'.');
+        const params=args.trim()?args.split(',').map(a=>a.trim().replace(/^double\s+/i,'').toLowerCase()):[];
+        if(!params.every(p=>identifier.test(p))||new Set(params).size!==params.length) throw Error('Invalid helper parameters in '+name+'.');
+        take(/^\{/,'Expected an Origin function body.');
+        const locals=[];
+        while(declaration.test(rest)){const [,n,expr]=take(declaration);locals.push([n.toLowerCase(),expr]);}
+        const result=returned();
+        take(/^\}\s*;?/,'Unsupported statement after return in '+name+'.');
+        helpers.set(key,{params,locals,result});
+      }else{
+        const [,key,expr]=take(declaration,'Unsupported Origin script. Use numeric double declarations and functions with return or if/else.');
+        globals.set(key.toLowerCase(),binding(replaceNames(expr,globals)));
+      }
+    }
+    const names=new Map(globals);
+    parameters.forEach((p,i)=>names.set(p.toLowerCase(),['u','v'][i]));
+    const tuple=coordinates.map(expression=>{
+      const call=expression.match(/^([a-z_][\w]*)\s*\(([\s\S]*)\)$/i);
+      const helper=call&&helpers.get(call[1].toLowerCase());
+      if(!helper) return replaceNames(expression,names);
+      const args=[];let depth=0,start=0;
+      for(let i=0;i<call[2].length;i++){
+        const c=call[2][i];
+        if(c==='(')depth++;if(c===')')depth--;
+        if(c===','&&!depth){args.push(call[2].slice(start,i));start=i+1;}
+      }
+      if(call[2].trim()) args.push(call[2].slice(start));
+      if(args.length!==helper.params.length) throw Error('Wrong number of arguments to '+call[1]+'.');
+      const scope=new Map(globals);
+      helper.params.forEach((p,i)=>scope.set(p,'('+replaceNames(args[i],names)+')'));
+      for(const [key,expr] of helper.locals)scope.set(key,binding(replaceNames(expr,scope)));
+      return replaceNames(helper.result,scope);
+    });
+    return [...lines,'('+tuple.join(',\n ')+')'].join('\n');
+  }
+
+  function parse(xml,filename){
+    if(xml.length>262144) throw Error('Choose a definition smaller than 256 KiB.');
+    if(/<!DOCTYPE|<!ENTITY/i.test(xml)) throw Error('Document types and custom entities are unsupported.');
+    const doc=new DOMParser().parseFromString(xml,'application/xml');
+    if(doc.getElementsByTagName('parsererror').length || doc.documentElement.localName!=='Settings')
+      throw Error('Expected an Origin 3D parametric Settings XML document.');
+    const fields=new Map();
+    for(const node of doc.documentElement.children){
+      const key=node.getAttribute('Label');
+      if(!key)continue;
+      if(fields.has(key))throw Error('Duplicate XML field '+key+'.');
+      fields.set(key,node.textContent.trim());
+    }
+    const required=key=>{const s=fields.get(key);if(!s)throw Error('Missing Origin field '+key+'.');return s;};
+    const parameters=['str1stParam','str2ndParam'].map(required);
+    if(!parameters.every(s=>identifier.test(s))||parameters[0].toLowerCase()===parameters[1].toLowerCase())
+      throw Error('Expected two distinct parameter names.');
+    const domain=['str1stFrom','str1stTo','str2ndFrom','str2ndTo'].map(key=>SurfaceMath.compile(required(key),[])(0,0));
+    if(!domain.every(Number.isFinite)||domain[0]>=domain[1]||domain[2]>=domain[3])throw Error('Invalid Origin parameter limits.');
+    const samples=['nCols','nRows'].map(key=>Number(required(key)));
+    if(!samples.every(n=>Number.isInteger(n)&&n>=5&&n<=257)) throw Error('Use 5 to 257 samples per axis in the Origin definition.');
+    const formula=translate(fields.get('strPrescript')||'',['str1stFormula','str2ndFormula','str3rdFormula'].map(required),parameters);
+    SurfaceMath.compileParametric(formula);
+    const name=filename.replace(/\.(?:ofp|xml)$/i,'').replace(/^\d+-ParamFunc3D-/i,'').replace(/_/g,' ')||'Imported surface';
+    return {id:'imported',name,shape:'parametric',domain,formula,grid:samples.map(n=>n-1),color:'#79baca',relief:40};
+  }
+  return {parse};
+})();
+</script><script>// An unsigned distance field lets the two sides of a twisted surface meet at its crossing.
+const SurfaceWall=(()=>{
+  const cache=new WeakMap();
+  const squared=(x,y,z)=>x*x+y*y+z*z;
+  function segment(px,py,pz,x,y,z,length2){
+    const t=length2?Math.max(0,Math.min(1,(px*x+py*y+pz*z)/length2)):0;
+    return squared(px-t*x,py-t*y,pz-t*z);
+  }
+  function fused(mesh,points,width,relief,thickness){
+    const key=[width,relief,thickness].join(',');
+    if(cache.get(mesh)?.key===key)return cache.get(mesh).solid;
+    const lo=[Infinity,Infinity,Infinity],hi=[-Infinity,-Infinity,-Infinity];
+    for(const p of points)for(let k=0;k<3;k++){lo[k]=Math.min(lo[k],p[k]);hi[k]=Math.max(hi[k],p[k]);}
+    const span=hi.map((v,k)=>v-lo[k]),radius=thickness/2;
+    const step=Math.min(thickness/2.5,Math.max(...span)/60);
+    const dims=span.map(v=>Math.ceil((v+thickness)/step)+5);
+    const [nx,ny,nz]=dims,stride=nx*ny,total=stride*nz;
+    if(total>5000000||Math.max(...dims)>1024)throw Error('Increase wall thickness or reduce the print dimensions for the fused wall.');
+    const origin=lo.map(v=>v-radius-2*step);
+    const band=radius+1.75*step;
+    const field=new Float32Array(total).fill(band*band);
+    for(const [ia,ib,ic] of mesh.faces){
+      const a=points[ia],b=points[ib],c=points[ic];
+      const [ex,ey,ez]=b.map((v,k)=>v-a[k]),[fx,fy,fz]=c.map((v,k)=>v-a[k]);
+      const [gx,gy,gz]=c.map((v,k)=>v-b[k]);
+      const ee=squared(ex,ey,ez),ff=squared(fx,fy,fz),gg=squared(gx,gy,gz),ef=ex*fx+ey*fy+ez*fz;
+      const normal=SurfaceMath.cross([ex,ey,ez],[fx,fy,fz]),area2=squared(...normal);
+      if(!area2)continue;
+      const low=a.map((v,k)=>Math.max(0,Math.ceil((Math.min(v,b[k],c[k])-band-origin[k])/step)));
+      const high=a.map((v,k)=>Math.min(dims[k]-1,Math.floor((Math.max(v,b[k],c[k])+band-origin[k])/step)));
+      for(let z=low[2];z<=high[2];z++)for(let y=low[1];y<=high[1];y++){
+        const py=origin[1]+y*step-a[1],pz=origin[2]+z*step-a[2];
+        for(let x=low[0];x<=high[0];x++){
+          const px=origin[0]+x*step-a[0],de=px*ex+py*ey+pz*ez,df=px*fx+py*fy+pz*fz;
+          const s=ff*de-ef*df,t=ee*df-ef*de;
+          let d;
+          if(s>=0&&t>=0&&s+t<=area2){
+            const h=px*normal[0]+py*normal[1]+pz*normal[2];d=h*h/area2;
+          }else d=Math.min(segment(px,py,pz,ex,ey,ez,ee),segment(px,py,pz,fx,fy,fz,ff),segment(px-ex,py-ey,pz-ez,gx,gy,gz,gg));
+          const id=z*stride+y*nx+x;if(d<field[id])field[id]=d;
+        }
+      }
+    }
+    const threshold=radius*radius,epsilon=threshold*1e-5;
+    for(let i=0;i<total;i++){const d=field[i]-threshold;field[i]=Math.abs(d)<epsilon?epsilon:d;}
+    const position=i=>[i%nx,Math.floor(i/nx)%ny,Math.floor(i/stride)];
+    const vertices=[],faces=[],edges=new Map();
+    function crossing(i,j){
+      const id=Math.min(i,j)*total+Math.max(i,j);
+      if(edges.has(id))return edges.get(id);
+      const a=position(i),b=position(j),t=field[i]/(field[i]-field[j]);
+      const index=vertices.length;
+      vertices.push(a.map((v,k)=>origin[k]+(v+t*(b[k]-v))*step));edges.set(id,index);
+      return index;
+    }
+    function face(a,b,c,outward){
+      const p=vertices[a],q=vertices[b],r=vertices[c];
+      const normal=SurfaceMath.cross(q.map((v,k)=>v-p[k]),r.map((v,k)=>v-p[k]));
+      faces.push(normal.reduce((s,v,k)=>s+v*outward[k],0)>0?[a,b,c]:[a,c,b]);
+    }
+    const offsets=[0,1,nx,nx+1,stride,stride+1,stride+nx,stride+nx+1];
+    const tetrahedra=[[0,1,3,7],[0,3,2,7],[0,2,6,7],[0,6,4,7],[0,4,5,7],[0,5,1,7]];
+    for(let z=0;z<nz-1;z++)for(let y=0;y<ny-1;y++)for(let x=0;x<nx-1;x++){
+      const base=z*stride+y*nx+x,negative=field[base]<0;
+      if(offsets.every(d=>(field[base+d]<0)===negative))continue;
+      for(const cell of tetrahedra){
+        const inside=[],outside=[];
+        for(const k of cell){const i=base+offsets[k];(field[i]<0?inside:outside).push(i);}
+        if(!inside.length||!outside.length)continue;
+        const p=position(inside[0]),out=position(outside[0]).map((v,k)=>v-p[k]);
+        if(inside.length===2){
+          const [i,j]=inside,[s,t]=outside,a=crossing(i,s),b=crossing(i,t),c=crossing(j,t),d=crossing(j,s);
+          face(a,b,c,out);face(a,c,d,out);
+        }else{
+          const single=inside.length===1?inside:outside,other=single===inside?outside:inside;
+          face(...other.map(i=>crossing(single[0],i)),out);
+        }
+      }
+    }
+    if(!faces.length)throw Error('The wall could not be sampled at these print dimensions.');
+    const floor=vertices.reduce((z,p)=>Math.min(z,p[2]),Infinity);
+    for(const p of vertices)p[2]-=floor;
+    const solid={vertices,faces};cache.set(mesh,{key,solid});return solid;
+  }
+  return {fused};
+})();
 </script><script>const SurfaceGeometry = (() => {
   const {compile,compileParametric,cross} = SurfaceMath;
-  function sample(spec,n) {
+  function sample(spec,n,nv=n) {
     const {shape,domain,formula} = spec;
-    if (!Number.isInteger(n) || n<4 || n>256) throw Error('Choose a resolution between 4 and 256.');
+    if (![n,nv].every(v=>Number.isInteger(v)&&v>=4&&v<=256)) throw Error('Choose a resolution between 4 and 256.');
     const vertices=[], faces=[], quads=[];
     const min=[Infinity,Infinity,Infinity],max=[-Infinity,-Infinity,-Infinity];
     const fn = shape ? compileParametric(formula) : compile(formula);
     if (!domain || domain.length!==4 || !domain.every(Number.isFinite) || domain[0]>=domain[1] || domain[2]>=domain[3])
       throw Error('Each domain maximum must be greater than its minimum.');
-    for(let j=0;j<=n;j++) for(let i=0;i<=n;i++) {
+    for(let j=0;j<=nv;j++) for(let i=0;i<=n;i++) {
       const x=domain[0]+(domain[1]-domain[0])*i/n;
-      const y=domain[2]+(domain[3]-domain[2])*j/n;
+      const y=domain[2]+(domain[3]-domain[2])*j/nv;
       const p=shape?fn(x,y):[x,y,fn(x,y)];
       if (!p.every(Number.isFinite)) throw Error('Undefined surface at '+(shape?'u':'x')+' = '+x.toFixed(3)+', '+(shape?'v':'y')+' = '+y.toFixed(3)+'. Adjust the equation or domain.');
       vertices.push(p);
@@ -183,22 +417,35 @@ const SurfaceMath = (() => {
     const stride=n+1;
     const tolerance=Math.max(...max.map((v,k)=>v-min[k]))*1e-9;
     const coincides=(a,b)=>vertices[a].every((v,k)=>Math.abs(v-vertices[b][k])<=tolerance);
-    const indices=Array.from({length:stride},(_,i)=>i);
-    const periodicU=Boolean(shape)&&indices.every(j=>coincides(j*stride,j*stride+n));
-    const periodicV=Boolean(shape)&&indices.every(i=>coincides(i,n*stride+i));
-    const columns=n+(periodicU?0:1), rows=n+(periodicV?0:1);
+    const alongU=Array.from({length:stride},(_,i)=>i);
+    const alongV=Array.from({length:nv+1},(_,j)=>j);
+    const sameU=Boolean(shape)&&alongV.every(j=>coincides(j*stride,j*stride+n));
+    const periodicV=Boolean(shape)&&alongU.every(i=>coincides(i,nv*stride+i));
+    let twist=-1;
+    if(periodicV&&!sameU){
+      // The Klein bottle identifies (uMax,v) with (uMin, pi-v).
+      // A half-turn needs an even number of intervals to share exact vertices.
+      if(nv%2 && alongV.every(j=>{
+        const phase=(1.5-j/nv)%1;
+        const q=fn(domain[0],domain[2]+(domain[3]-domain[2])*phase);
+        return vertices[j*stride+n].every((v,k)=>Math.abs(v-q[k])<=tolerance);
+      }))return sample(spec,n,nv+1);
+      twist=alongV.slice(0,nv).find(offset=>alongV.every(j=>coincides(j*stride+n,((offset-j+nv)%nv)*stride)))??-1;
+    }
+    const periodicU=sameU||twist>=0;
+    const columns=n+(periodicU?0:1), rows=nv+(periodicV?0:1);
     if(periodicU||periodicV){
       for(let j=0;j<rows;j++) for(let i=0;i<columns;i++) vertices[j*columns+i]=vertices[j*stride+i];
       vertices.length=rows*columns;
     }
-    const at=(i,j)=>(j%rows)*columns+i%columns;
-    for(let j=0;j<n;j++) for(let i=0;i<n;i++) {
+    const at=(i,j)=>((twist>=0&&i===n?(twist-j+nv)%nv:j%rows)*columns+i%columns);
+    for(let j=0;j<nv;j++) for(let i=0;i<n;i++) {
       const a=at(i,j), b=at(i+1,j), c=at(i+1,j+1), d=at(i,j+1);
       quads.push([a,b,c,d]); faces.push([a,b,c],[a,c,d]);
     }
     // An edited equation may open or close a seam independently of its starting preset.
     const radialWall=shape==='catenoid' && formula===SurfaceMath.presets.find(p=>p.id==='catenoid').formula;
-    return {vertices,faces,quads,min,max,n,at,columns,rows,shape,periodicU,periodicV,radialWall};
+    return {vertices,faces,quads,min,max,n,nv,at,columns,rows,shape,periodicU,periodicV,twisted:twist>=0,radialWall};
   }
   // Fit X and Y with one scale factor. Relief is independently specified in mm.
   function transform(mesh,width,relief) {
@@ -244,14 +491,15 @@ const SurfaceMath = (() => {
   function solid(mesh,width,relief,thickness,construction='base') {
     if (![width,relief,thickness].every(v=>Number.isFinite(v)&&v>0)) throw Error('Print dimensions must be positive.');
     const convert=transform(mesh,width,relief), vertices=mesh.vertices.map(convert), faces=mesh.faces.slice();
-    const {n,at,shape}=mesh;
+    const {n,nv,at,shape}=mesh;
+    if(mesh.twisted) return SurfaceWall.fused(mesh,vertices,width,relief,thickness);
     function bridge(a,b,c,d){faces.push([a,b,c],[a,c,d]);}
     if(!shape) {
       const ring=[];
       for(let i=0;i<n;i++)ring.push(at(i,0));
-      for(let j=0;j<n;j++)ring.push(at(n,j));
-      for(let i=n;i>0;i--)ring.push(at(i,n));
-      for(let j=n;j>0;j--)ring.push(at(0,j));
+      for(let j=0;j<nv;j++)ring.push(at(n,j));
+      for(let i=n;i>0;i--)ring.push(at(i,nv));
+      for(let j=nv;j>0;j--)ring.push(at(0,j));
       if(construction==='shell') return surfaceShell(vertices,mesh.faces,ring.map((a,i)=>[a,ring[(i+1)%ring.length]]),thickness,true);
       for(const p of vertices) p[2]+=thickness;
       // A single fan seals the flat base with identical edge vertices on each rim.
@@ -272,15 +520,13 @@ const SurfaceMath = (() => {
       }
       for(const [a,b,c] of mesh.faces)faces.push([c+count,b+count,a+count]);
       for(let i=0;i<n;i++){
-        const a=at(i,0),b=at(i+1,0),c=at(i,n),d=at(i+1,n);
+        const a=at(i,0),b=at(i+1,0),c=at(i,nv),d=at(i+1,nv);
         bridge(b,a,a+count,b+count); bridge(c,d,d+count,c+count);
       }
     } else if(!mesh.periodicU || !mesh.periodicV) {
       const boundary=[];
-      for(let i=0;i<n;i++){
-        if(!mesh.periodicU) boundary.push([at(n,i),at(n,i+1)],[at(0,i+1),at(0,i)]);
-        if(!mesh.periodicV) boundary.push([at(i,0),at(i+1,0)],[at(i+1,n),at(i,n)]);
-      }
+      if(!mesh.periodicU) for(let j=0;j<nv;j++) boundary.push([at(n,j),at(n,j+1)],[at(0,j+1),at(0,j)]);
+      if(!mesh.periodicV) for(let i=0;i<n;i++) boundary.push([at(i,0),at(i+1,0)],[at(i+1,nv),at(i,nv)]);
       return surfaceShell(vertices,mesh.faces,boundary,thickness,false);
     } else {
       // Reversing either parameter reverses the surface winding.
@@ -496,8 +742,8 @@ const SurfaceMath = (() => {
   const integer=v=>new Intl.NumberFormat('en-US').format(v);
   const value=id=>$(id).valueAsNumber;
   const config=()=>({width:value('width'),relief:value('relief'),base:value('base'),construction:$('construction').value});
-  const preset=()=>presets.find(p=>p.id===presetId);
-  function name(){return preset()?.name||'Custom surface';}
+  let originalPreset,importVersion=0;
+  function name(){return presetId?originalPreset.name:'Custom surface';}
   function toast(message){$('toast').textContent=message;$('toast').classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toast').classList.remove('show'),2600);}
   function fieldError(id,message){$(id).textContent=message||'';$(id).hidden=!message;}
   function meshSolid(){const c=config();return solid(mesh,c.width,c.relief,c.base,c.construction);}
@@ -540,23 +786,24 @@ const SurfaceMath = (() => {
   }
   function domainControls(){
     $('domainInputs').replaceChildren();
-    $('domainHint').textContent=spec.shape?'PARAMETERS':'MIN / MAX';
-    if(spec.shape){
-      const p=document.createElement('p');p.className='param-note';
-      p.textContent=spec.shape==='catenoid'?'u ∈ [0, 2π]   ·   v ∈ [−1.25, 1.25]':'u, v ∈ [0, 2π]';
-      $('domainInputs').append(p);return;
-    }
-    for(const [idx,axis] of ['x','y'].entries()){
+    $('domainHint').textContent='MIN / MAX';
+    for(const [idx,axis] of (spec.shape?['u','v']:['x','y']).entries()){
       const row=document.createElement('div');row.className='number-pair';
       row.innerHTML='<span>'+axis+'</span><input type="number" step="any" aria-label="'+axis.toUpperCase()+' minimum"><span class="to">→</span><input type="number" step="any" aria-label="'+axis.toUpperCase()+' maximum">';
       [...row.querySelectorAll('input')].forEach((input,k)=>{input.value=spec.domain[idx*2+k];input.oninput=()=>{spec.domain[idx*2+k]=input.valueAsNumber;refresh();if(valid)resetStart();};});
       $('domainInputs').append(row);
     }
   }
-  function refresh(){
+  function sampling(){
+    const density=value('resolution');
+    if(!spec.grid)return [density,density];
+    const max=Math.max(...spec.grid);
+    return spec.grid.map(n=>Math.max(4,Math.round(n*density/max)));
+  }
+  function refresh(readyMesh){
     clearResult();valid=false;
     try{
-      mesh=sample(spec,value('resolution'));
+      mesh=readyMesh??sample(spec,...sampling());
       fn=spec.shape?null:compile(spec.formula);valid=true;
       $('expression').setAttribute('aria-invalid','false');
       refreshPrintMesh();
@@ -565,8 +812,9 @@ const SurfaceMath = (() => {
       $('faceCount').textContent='Last valid preview';
     }
     $('exportButton').disabled=!valid;$('runOpt').disabled=!valid||Boolean(spec.shape);
-    $('resValue').textContent=$('resolution').value+' × '+$('resolution').value;
-    $('resolution').style.setProperty('--fill',((value('resolution')-16)/112*100)+'%');
+    const sizes=valid?[mesh.n,mesh.nv]:sampling();
+    $('resValue').textContent=sizes.join(' × ');
+    $('resolution').style.setProperty('--fill',((value('resolution')-Number($('resolution').min))/(Number($('resolution').max)-Number($('resolution').min))*100)+'%');
     updateTitle();redraw();
   }
   function refreshPrintMesh(){
@@ -574,24 +822,40 @@ const SurfaceMath = (() => {
     catch(err){printMesh=null;fieldError('error',err.message+' Open Export STL to adjust the settings.');}
     updateFaceCount();
   }
-  function choose(p){
+  function choose(p,readyMesh){
+    originalPreset=p;importVersion++;fieldError('importError','');
     presetId=p.id;spec={...p,domain:p.domain?.slice()};color=p.color;
     $('expression').value=spec.formula;
     $('expression').rows=p.shape?Math.min(8,Math.max(3,p.formula.split('\n').length+1)):p.formula.length>55?2:1;
     $('expression').classList.toggle('parametric-expression',Boolean(p.shape));
     $('parametricHelp').hidden=!p.shape;
     $('exprType').textContent=p.shape?'r(u, v)':'z = f(x, y)';
-    $('width').value=100;$('relief').value=p.relief;$('base').value=2;$('resolution').value=64;$('construction').value='base';
-    domainControls();colorControls();resetStart();resetCamera();refresh();setOptimizer(optimizing);
+    $('width').value=100;$('relief').value=p.relief;$('base').value=2;
+    $('resolution').min=p.grid?4:16;$('resolution').max=p.grid?256:128;$('resolution').step=p.grid?1:4;
+    $('resolution').value=p.grid?Math.max(...p.grid):64;$('construction').value='base';
+    domainControls();colorControls();resetStart();resetCamera();refresh(readyMesh);setOptimizer(optimizing);
   }
   $('expression').oninput=()=>{
     spec.formula=$('expression').value;
-    const original=presets.find(p=>p.id===spec.id);
-    presetId=original?.formula===spec.formula?original.id:null;
+    presetId=originalPreset.formula===spec.formula?originalPreset.id:null;
     refresh();
   };
-  $('resolution').oninput=refresh;
-  $('resetControls').onclick=()=>{choose(presets.find(p=>p.id===spec.id)||presets[0]);toast('Preset defaults restored');};
+  $('resolution').oninput=()=>refresh();
+  $('resetControls').onclick=()=>{choose(originalPreset);toast('Surface defaults restored');};
+  $('importButton').onclick=()=>$('originFile').click();
+  $('originFile').onchange=async()=>{
+    const file=$('originFile').files[0];if(!file)return;
+    const ticket=++importVersion;$('originFile').value='';
+    try{
+      if(file.size>262144)throw Error('Choose a definition smaller than 256 KiB.');
+      const bytes=new Uint8Array(await file.arrayBuffer());
+      const encoding=bytes[0]===255&&bytes[1]===254?'utf-16le':bytes[0]===254&&bytes[1]===255?'utf-16be':'utf-8';
+      if(ticket!==importVersion)return;
+      const imported=SurfaceOrigin.parse(new TextDecoder(encoding,{fatal:true}).decode(bytes),file.name);
+      const sampled=sample(imported,...imported.grid);
+      optimizing=false;choose(imported,sampled);toast('Imported '+imported.name);
+    }catch(err){if(ticket===importVersion)fieldError('importError','Import failed. '+err.message);}
+  };
   function setOptimizer(active){
     optimizing=active;$('studioNav').classList.toggle('active',!active);$('optimizerNav').classList.toggle('active',active);
     $('editorPane').hidden=active;$('optimizerPane').hidden=!active;
@@ -649,7 +913,8 @@ const SurfaceMath = (() => {
     const closed=mesh.periodicU&&mesh.periodicV;
     $('constructionLabel').hidden=Boolean(spec.shape);
     $('shellHint').hidden=!shell;
-    $('thicknessLabel').hidden=Boolean(spec.shape)&&closed;
+    $('twistHint').hidden=!mesh.twisted;
+    $('thicknessLabel').hidden=Boolean(spec.shape)&&closed&&!mesh.twisted;
     $('base').disabled=$('thicknessLabel').hidden;
     $('thicknessName').textContent=mesh.radialWall?'Radial wall':spec.shape||shell?'Wall thickness':'Base thickness';
     $('widthName').textContent=shell?'Graph XY span':'Longest XY side';
@@ -726,8 +991,9 @@ const SurfaceMath = (() => {
 </div></header>
 <main>
   <section class="page-heading"><div><h1>Surface studio</h1><p>Shape mathematical expressions into printable 3D meshes.</p></div>
-    <button id="exportButton" class="primary"><i data-icon="download"></i>Export STL</button>
+    <div class="file-actions"><button id="importButton" class="browse">Import Origin file</button><input id="originFile" type="file" accept=".ofp,.xml" hidden><button id="exportButton" class="primary"><i data-icon="download"></i>Export STL</button></div>
   </section>
+  <p id="importError" class="error" role="alert" hidden></p>
   <div class="workspace">
     <section class="panel viewport" id="viewport">
       <div class="panel-heading"><h2><i data-icon="cube"></i>Surface preview</h2>
@@ -768,6 +1034,7 @@ const SurfaceMath = (() => {
     <div class="print-fields"><label id="constructionLabel">Mesh style<select id="construction"><option value="base">Flat base</option><option value="shell">Thickened surface</option></select></label>
     <label id="thicknessLabel"><span id="thicknessName">Base thickness</span> <span>(mm)</span><input type="number" id="base" min="0.1" max="100" step="any" required value="2"></label>
     <p id="shellHint" class="shell-hint" hidden>The wall follows both sides of the graph and closes at the edges. Solid dimensions include the wall.</p>
+    <p id="twistHint" class="shell-hint" hidden>The surface twists through itself. Export creates a wall with an approximate thickness and fuses the crossing.</p>
     <label><span id="widthName">Longest XY side</span> <span>(mm)</span><input type="number" id="width" min="5" max="1000" step="any" required value="100"></label>
     <label>Surface relief <span>(mm)</span><input type="number" id="relief" min="0.1" max="1000" step="any" required value="58"></label>
     </div>
@@ -778,6 +1045,7 @@ const SurfaceMath = (() => {
   <h3>Build a surface</h3><p>Choose a preset or enter a height equation in x and y. Try <code>cos(x) * sin(y)</code>. Choose a domain where the expression is finite and continuous. Changes update the preview automatically. Use ^ for powers, pi for π, and radians for angles.</p>
   <p>For a parametric surface, open Torus, Catenoid or Trefoil knot and edit the coordinate tuple in the expression field. On the torus, try changing <code>minor = 0.72</code> to <code>minor = 1</code> to thicken its ring. A tuple may also start with <code>r(u,v) =</code>. Matching domain edges join at a seam. Open sheets use the wall thickness in Export STL.</p>
   <details><summary>Supported functions</summary><p>sin, cos, tan, asin, acos, atan, sinh, cosh, tanh, exp, log (natural), log10, sqrt, abs, floor, ceil, sinc, min, max, pow, hypot and atan2. The last five take two arguments. sinc(0) is 1.</p></details>
+  <h3>Piecewise and Origin formulas</h3><p>Use <code>if(x &lt; 0, -x, x)</code> or <code>x &lt; 0 ? -x : x</code> in a height or coordinate expression. Nest conditions for additional branches. Combine comparisons with <code>&amp;&amp;</code>, <code>||</code> and <code>!</code>.</p><p>Choose <b>Import Origin file</b> to load a 3D parametric Settings definition (.ofp or .xml). Surface Lab translates numeric declarations and coordinate helpers with return and if/else branches. Edit the translated tuple or find Klein bottle in the preset library.</p>
   <h3>Explore the mesh</h3><p>Drag to orbit or scroll to zoom. Focus the preview and use arrow keys or + and − for keyboard control. Wireframe shows sampling density. Print mesh shows the solid geometry.</p>
   <h3>Find an extremum</h3><p>In Optimizer, choose a method and starting point. Gradient descent follows the local slope, Nelder–Mead moves a triangle, and grid search refines the best sampled region. Results are bounded numerical estimates. <a href="https://www.sfu.ca/~ssurjano/optimization.html" target="_blank" rel="noreferrer">Optimization test functions ↗</a></p>
   <h3>Prepare a print</h3><p>For a height graph, open Export STL and choose Flat base or Thickened surface. A thickened surface adds half the wall thickness to each side along the local normal, then joins the edges. The XY span and relief set the size of the original graph. Check Solid dimensions for the final size. The catenoid uses a radial wall, and closed parametric shapes export as solids. Import the STL in millimeters and check orientation and supports in your slicer.</p>

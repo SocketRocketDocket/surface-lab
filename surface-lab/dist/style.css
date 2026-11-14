@@ -12,3 +12,5 @@ dialog{padding:23px;width:min(470px,calc(100% - 30px));max-height:88dvh;overflow
 .print-fields #widthName{color:inherit}
 .shell-hint{grid-column:1/-1;font-size:12px;line-height:1.5;color:var(--muted);margin:0}
 .expr-box textarea.parametric-expression{max-height:none}
+.file-actions{display:flex;gap:8px;align-items:center}.file-actions button{white-space:nowrap}#importError{margin:-6px 0 12px}
+@media(max-width:560px){.page-heading:has(.file-actions){flex-wrap:wrap}.file-actions{flex-wrap:wrap}}
