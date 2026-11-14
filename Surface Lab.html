@@ -32,7 +32,7 @@ const SurfaceMath = (() => {
     rmod: (x,y) => x%y
   };
   function compile(source,parameters=['x','y'],locals=Object.create(null)) {
-    const clean = (parameters[0]==='x'?source.trim().replace(/^z\s*=\s*/i,''):source.trim()).toLowerCase()
+    const clean = (parameters.length===2 && parameters[0]==='x'?source.trim().replace(/^z\s*=\s*/i,''):source.trim()).toLowerCase()
       .replaceAll('π','pi').replaceAll('²','^2').replaceAll('³','^3').replaceAll('−','-')
       .replaceAll('×','*').replaceAll('÷','/').replaceAll('**','^');
     if (!clean || clean.length > 8192) throw Error('Enter an expression of up to 8192 characters.');
@@ -46,8 +46,12 @@ const SurfaceMath = (() => {
         return expr;
       }
       if (t && t === parameters[0]) return x => x;
-      if (t && t === parameters[1]) return (x,y) => y;
-      if (t === parameters.join('')) return (x,y) => x*y;
+      if (t && t === parameters[1]) return (x,y,z) => y;
+      if (parameters.length===3 && t===parameters[2]) return (x,y,z)=>z;
+      if (t === parameters[0]+parameters[1]) return (x,y,z)=>x*y;
+      if (parameters.length===3 && t==='xz') return (x,y,z)=>x*z;
+      if (parameters.length===3 && t==='yz') return (x,y,z)=>y*z;
+      if (parameters.length===3 && t==='xyz') return (x,y,z)=>x*y*z;
       if (Object.hasOwn(locals,t)) return () => locals[t];
       if (t === 'pi' || t === 'e') return () => t === 'pi' ? Math.PI : Math.E;
       if (t && /^\d|^\./.test(t) && Number.isFinite(Number(t))) return () => Number(t);
@@ -59,7 +63,7 @@ const SurfaceMath = (() => {
         if(tokens[i++]!==',') throw Error('Add a false value to the conditional.');
         const no=conditional();
         if(tokens[i++]!==')') throw Error('Check the conditional parentheses.');
-        return (x,y)=>test(x,y)?yes(x,y):no(x,y);
+        return (x,y,z)=>test(x,y,z)?yes(x,y,z):no(x,y,z);
       }
       if (Object.hasOwn(functions,t)) {
         if (tokens[i++] !== '(') throw Error('Use parentheses around function arguments.');
@@ -69,19 +73,19 @@ const SurfaceMath = (() => {
         if (tokens[i++] !== ')') throw Error('Check the function parentheses.');
         const binary = ['min','max','atan2','hypot','pow','rmod'].includes(t);
         if (binary !== Boolean(second)) throw Error(t + ' takes ' + (binary ? 'two arguments.' : 'one argument.'));
-        return second ? (x,y) => functions[t](first(x,y),second(x,y)) : (x,y) => functions[t](first(x,y));
+        return second ? (x,y,z) => functions[t](first(x,y,z),second(x,y,z)) : (x,y,z) => functions[t](first(x,y,z));
       }
       throw Error(t ? 'Unrecognized term “' + t + '”.' : 'The expression is incomplete.');
     }
     function power() {
       const a = atom();
       if (tokens[i] !== '^') return a;
-      i++; const b = unary(); return (x,y) => a(x,y) ** b(x,y);
+      i++; const b = unary(); return (x,y,z) => a(x,y,z) ** b(x,y,z);
     }
     function unary() {
-      if (tokens[i] === '-') { i++; const a = unary(); return (x,y) => -a(x,y); }
+      if (tokens[i] === '-') { i++; const a = unary(); return (x,y,z) => -a(x,y,z); }
       if (tokens[i] === '+') { i++; return unary(); }
-      if (tokens[i] === '!') { i++; const a=unary(); return (x,y)=>Number(!a(x,y)); }
+      if (tokens[i] === '!') { i++; const a=unary(); return (x,y,z)=>Number(!a(x,y,z)); }
       return power();
     }
     function product() {
@@ -92,7 +96,7 @@ const SurfaceMath = (() => {
         if (!implicit && t !== '*' && t !== '/') break;
         if (!implicit) i++;
         const left = expr, right = unary();
-        expr = t === '/' ? (x,y) => left(x,y)/right(x,y) : (x,y) => left(x,y)*right(x,y);
+        expr = t === '/' ? (x,y,z) => left(x,y,z)/right(x,y,z) : (x,y,z) => left(x,y,z)*right(x,y,z);
       }
       return expr;
     }
@@ -100,7 +104,7 @@ const SurfaceMath = (() => {
       let expr = product();
       while (tokens[i] === '+' || tokens[i] === '-') {
         const t = tokens[i++], left = expr, right = product();
-        expr = t === '+' ? (x,y) => left(x,y)+right(x,y) : (x,y) => left(x,y)-right(x,y);
+        expr = t === '+' ? (x,y,z) => left(x,y,z)+right(x,y,z) : (x,y,z) => left(x,y,z)-right(x,y,z);
       }
       return expr;
     }
@@ -110,7 +114,7 @@ const SurfaceMath = (() => {
       let expr=next();
       while(Object.hasOwn(operations,tokens[i])){
         const op=operations[tokens[i++]],left=expr,right=next();
-        expr=(x,y)=>Number(op(left(x,y),right(x,y)));
+        expr=(x,y,z)=>Number(op(left(x,y,z),right(x,y,z)));
       }
       return expr;
     }
@@ -118,20 +122,42 @@ const SurfaceMath = (() => {
     const equal=()=>compare(relational,equality);
     function and(){
       let expr=equal();
-      while(tokens[i]==='&&'){i++;const left=expr,right=equal();expr=(x,y)=>Number(Boolean(left(x,y)&&right(x,y)));}
+      while(tokens[i]==='&&'){i++;const left=expr,right=equal();expr=(x,y,z)=>Number(Boolean(left(x,y,z)&&right(x,y,z)));}
       return expr;
     }
     function conditional(){
       let test=and();
-      while(tokens[i]==='||'){i++;const left=test,right=and();test=(x,y)=>Number(Boolean(left(x,y)||right(x,y)));}
+      while(tokens[i]==='||'){i++;const left=test,right=and();test=(x,y,z)=>Number(Boolean(left(x,y,z)||right(x,y,z)));}
       if(tokens[i]!=='?') return test;
       i++;const yes=conditional();
       if(tokens[i++]!==':') throw Error('Add a colon and a false value after the question mark.');
-      const no=conditional();return (x,y)=>test(x,y)?yes(x,y):no(x,y);
+      const no=conditional();return (x,y,z)=>test(x,y,z)?yes(x,y,z):no(x,y,z);
     }
     const result = conditional();
     if (i !== tokens.length) throw Error('Check the expression near “' + tokens[i] + '”.');
     return result;
+  }
+  function compileImplicit(source) {
+    // Only a single, top-level equals sign separates the sides. Comparisons
+    // inside a piecewise expression belong to the ordinary expression parser.
+    let depth=0,split=-1;
+    for(let i=0;i<source.length;i++){
+      const c=source[i];
+      if(c==='(')depth++;
+      else if(c===')')depth--;
+      else if(c==='='&&depth===0&&source[i+1]!=='='&&!/[<>=!]/.test(source[i-1]||' ')){
+        if(split>=0)throw Error('Enter one equation, with a single = between its two sides.');
+        split=i;
+      }
+    }
+    const vars=['x','y','z'];
+    if(split<0){
+      if(/[<>=!]/.test(source)&&!/[?:]|\b(?:if|piecewise)\s*\(/i.test(source))
+        throw Error('Use a single = for an implicit equation, or enter an expression equal to zero.');
+      return compile(source,vars);
+    }
+    const left=compile(source.slice(0,split),vars),right=compile(source.slice(split+1),vars);
+    return (x,y,z)=>left(x,y,z)-right(x,y,z);
   }
   function compileParametric(source) {
     if(source.length>24576) throw Error('Use up to 24576 characters for a parametric surface.');
@@ -202,9 +228,12 @@ const SurfaceMath = (() => {
     'cx = 6*cos(u)*(1+sin(u))','cy = 16*sin(u)',
     '(cx + if(first, radius*cos(u)*cos(v), radius*cos(v+pi)), cy + if(first, radius*sin(u)*cos(v), 0), radius*sin(v))'
   ].join('\n'),[0,tau,0,tau],'#79baca',40,'parametric');
+  add('sphere','Sphere','Implicit','x^2 + y^2 + z^2 = 1',[-1.2,1.2,-1.2,1.2,-1.2,1.2],'#7da9ff',100,'implicit');
+  add('gyroid','Gyroid','Implicit','sin(x)*cos(y) + sin(y)*cos(z) + sin(z)*cos(x) = 0',[-Math.PI,Math.PI,-Math.PI,Math.PI,-Math.PI,Math.PI],'#57d5c7',100,'implicit');
+  add('hyperboloid','One-sheet hyperboloid','Implicit','x^2 + y^2 - z^2 = 1',[-2,2,-2,2,-1.5,1.5],'#f38fc0',100,'implicit');
   const cross = (a,b) => [a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]];
   const unit = v => { const l=Math.hypot(...v); return v.map(k=>k/l); };
-  return {compile,compileParametric,presets,cross,unit};
+  return {compile,compileImplicit,compileParametric,presets,cross,unit};
 })();
 </script><script>// Translate the mathematical subset of Origin's Settings XML into the editable tuple syntax.
 const SurfaceOrigin = (() => {
@@ -336,6 +365,98 @@ const SurfaceOrigin = (() => {
   }
   return {parse};
 })();
+</script><script>// A conforming six-tetrahedron split gives adjacent cubes the same face diagonal.
+const SurfaceContour=(()=>{
+  const tetrahedra=[[0,1,3,7],[0,3,2,7],[0,2,6,7],[0,6,4,7],[0,4,5,7],[0,5,1,7]];
+  // All six tetrahedra have positive orientation. Determine triangle winding once
+  // using a reference tetrahedron, independently of plot aspect ratio or field scale.
+  const ref=[[0,0,0],[1,0,0],[0,1,0],[0,0,1]];
+  const cases=Array.from({length:16},(_,mask)=>{
+    const neg=[],pos=[],tri=[];
+    for(let i=0;i<4;i++)((mask>>i)&1?neg:pos).push(i);
+    if(!neg.length||!pos.length)return tri;
+    if(neg.length===2){
+      const [i,j]=neg,[s,t]=pos,a=[i,s],b=[i,t],c=[j,t],d=[j,s];
+      tri.push([a,b,c],[a,c,d]);
+    }else{
+      const [one,many]=neg.length===1?[neg,pos]:[pos,neg];
+      tri.push(many.map(i=>[one[0],i]));
+    }
+    for(const edges of tri){
+      const [a,b,c]=edges.map(([i,j])=>ref[i].map((v,k)=>(v+ref[j][k])/2));
+      const cross=SurfaceMath.cross(b.map((v,k)=>v-a[k]),c.map((v,k)=>v-a[k]));
+      if(cross.reduce((s,v,k)=>s+v*(ref[pos[0]][k]-ref[neg[0]][k]),0)<0)edges.reverse();
+    }
+    return tri;
+  });
+  function extract(field,[nx,ny,nz],origin,step,cap=false){
+    const stride=nx*ny,total=field.length;
+    const point=i=>[i%nx,Math.floor(i/nx)%ny,Math.floor(i/stride)].map((v,k)=>origin[k]+v*step[k]);
+    const vertices=[],faces=[],caps=[],edges=new Map(),nodes=new Map();
+    function node(i){
+      if(!nodes.has(i))nodes.set(i,vertices.push(point(i))-1);
+      return nodes.get(i);
+    }
+    function crossing(i,j){
+      if(i>j){const swap=i;i=j;j=swap;}
+      const key=i*total+j;
+      if(edges.has(key))return edges.get(key);
+      const a=Math.abs(field[i]),b=Math.abs(field[j]);
+      // The ratio stays finite even when the sum of two finite values would overflow.
+      const ratio=a<b?a/b:b/a,t=a<b?ratio/(1+ratio):1/(1+ratio);
+      // Near-node crossings would otherwise collapse when STL rounds to float32.
+      let index;
+      if(cap&&t<=1e-5)index=node(i);
+      else if(cap&&t>=1-1e-5)index=node(j);
+      else{
+        const p=point(i),q=point(j);
+        index=vertices.push(p.map((v,k)=>v+(q[k]-v)*t))-1;
+      }
+      edges.set(key,index);return index;
+    }
+    function face(list,a,b,c){
+      if(a!==b&&b!==c&&a!==c)list.push([a,b,c]);
+    }
+    const offsets=[0,1,nx,nx+1,stride,stride+1,stride+nx,stride+nx+1];
+    const tets=tetrahedra.map(t=>t.map(k=>offsets[k]));
+    for(let z=0;z<nz-1;z++)for(let y=0;y<ny-1;y++)for(let x=0;x<nx-1;x++){
+      const base=z*stride+y*nx+x,negative=field[base]<0;
+      if(offsets.every(d=>(field[base+d]<0)===negative))continue;
+      for(const tet of tets){
+        let mask=0;for(let k=0;k<4;k++)if(field[base+tet[k]]<0)mask|=1<<k;
+        for(const tri of cases[mask]){
+          const ids=tri.map(([i,j])=>crossing(base+tet[i],base+tet[j]));
+          face(faces,...ids);
+        }
+      }
+      if(cap&&faces.length>200000)throw Error('Too many crossings for this mesh. Reduce the resolution or narrow the domain.');
+    }
+    const surfaceCount=vertices.length;
+    if(cap&&faces.length){
+      // Clip each outward-facing box triangle to the negative side. Use exactly
+      // the same grid nodes, diagonals and edge intersections as the surface.
+      function clip(a,b,c){
+        const polygon=[];
+        for(const [i,j] of [[a,b],[b,c],[c,a]]){
+          if(field[i]<0)polygon.push(node(i));
+          if((field[i]<0)!==(field[j]<0))polygon.push(crossing(i,j));
+        }
+        for(let k=2;k<polygon.length;k++)face(caps,polygon[0],polygon[k-1],polygon[k]);
+      }
+      const dims=[nx,ny,nz],strides=[1,nx,stride];
+      for(let k=0;k<3;k++){
+        const u=(k+1)%3,v=(k+2)%3;
+        for(const side of [0,1])for(let j=0;j<dims[v]-1;j++)for(let i=0;i<dims[u]-1;i++){
+          const a=side*(dims[k]-1)*strides[k]+i*strides[u]+j*strides[v];
+          const b=a+strides[u],d=a+strides[v],c=b+strides[v];
+          if(side){clip(a,b,c);clip(a,c,d);}else{clip(a,c,b);clip(a,d,c);}
+        }
+      }
+    }
+    return {vertices,faces,caps,surfaceCount};
+  }
+  return {extract};
+})();
 </script><script>// An unsigned distance field lets the two sides of a twisted surface meet at its crossing.
 const SurfaceWall=(()=>{
   const cache=new WeakMap();
@@ -381,40 +502,7 @@ const SurfaceWall=(()=>{
     }
     const threshold=radius*radius,epsilon=threshold*1e-5;
     for(let i=0;i<total;i++){const d=field[i]-threshold;field[i]=Math.abs(d)<epsilon?epsilon:d;}
-    const position=i=>[i%nx,Math.floor(i/nx)%ny,Math.floor(i/stride)];
-    const vertices=[],faces=[],edges=new Map();
-    function crossing(i,j){
-      const id=Math.min(i,j)*total+Math.max(i,j);
-      if(edges.has(id))return edges.get(id);
-      const a=position(i),b=position(j),t=field[i]/(field[i]-field[j]);
-      const index=vertices.length;
-      vertices.push(a.map((v,k)=>origin[k]+(v+t*(b[k]-v))*step));edges.set(id,index);
-      return index;
-    }
-    function face(a,b,c,outward){
-      const p=vertices[a],q=vertices[b],r=vertices[c];
-      const normal=SurfaceMath.cross(q.map((v,k)=>v-p[k]),r.map((v,k)=>v-p[k]));
-      faces.push(normal.reduce((s,v,k)=>s+v*outward[k],0)>0?[a,b,c]:[a,c,b]);
-    }
-    const offsets=[0,1,nx,nx+1,stride,stride+1,stride+nx,stride+nx+1];
-    const tetrahedra=[[0,1,3,7],[0,3,2,7],[0,2,6,7],[0,6,4,7],[0,4,5,7],[0,5,1,7]];
-    for(let z=0;z<nz-1;z++)for(let y=0;y<ny-1;y++)for(let x=0;x<nx-1;x++){
-      const base=z*stride+y*nx+x,negative=field[base]<0;
-      if(offsets.every(d=>(field[base+d]<0)===negative))continue;
-      for(const cell of tetrahedra){
-        const inside=[],outside=[];
-        for(const k of cell){const i=base+offsets[k];(field[i]<0?inside:outside).push(i);}
-        if(!inside.length||!outside.length)continue;
-        const p=position(inside[0]),out=position(outside[0]).map((v,k)=>v-p[k]);
-        if(inside.length===2){
-          const [i,j]=inside,[s,t]=outside,a=crossing(i,s),b=crossing(i,t),c=crossing(j,t),d=crossing(j,s);
-          face(a,b,c,out);face(a,c,d,out);
-        }else{
-          const single=inside.length===1?inside:outside,other=single===inside?outside:inside;
-          face(...other.map(i=>crossing(single[0],i)),out);
-        }
-      }
-    }
+    const {vertices,faces}=SurfaceContour.extract(field,dims,origin,[step,step,step]);
     if(!faces.length)throw Error('The wall could not be sampled at these print dimensions.');
     const floor=vertices.reduce((z,p)=>Math.min(z,p[2]),Infinity);
     for(const p of vertices)p[2]-=floor;
@@ -430,6 +518,7 @@ const SurfaceWall=(()=>{
   }
   function sample(spec,n,nv=n) {
     const {shape,domain,formula} = spec;
+    if(shape==='implicit')return sampleImplicit(spec,n);
     validateGrid(n,nv);
     const vertices=[], faces=[], quads=[];
     const min=[Infinity,Infinity,Infinity],max=[-Infinity,-Infinity,-Infinity];
@@ -481,14 +570,66 @@ const SurfaceWall=(()=>{
     const radialWall=shape==='catenoid' && formula===SurfaceMath.presets.find(p=>p.id==='catenoid').formula;
     return {vertices,faces,quads,min,max,n,nv,at,columns,rows,shape,periodicU,periodicV,twisted:twist>=0,collapsedBoundary,radialWall};
   }
-  // Fit X and Y with one scale factor. Relief is independently specified in mm.
+  function bounds(vertices){
+    const min=[Infinity,Infinity,Infinity],max=[-Infinity,-Infinity,-Infinity];
+    for(const p of vertices)for(let k=0;k<3;k++){min[k]=Math.min(min[k],p[k]);max[k]=Math.max(max[k],p[k]);}
+    return {min,max};
+  }
+  function sampleImplicit({domain,formula,shape},n){
+    if(!Number.isInteger(n)||n<8||n>48)throw Error('Use 8 to 48 intervals per axis for an implicit surface.');
+    if(domain?.length!==6||!domain.every(Number.isFinite)||[0,2,4].some(k=>!(domain[k+1]>domain[k])))
+      throw Error('Each domain maximum must be greater than its minimum.');
+    const fn=SurfaceMath.compileImplicit(formula),origin=[domain[0],domain[2],domain[4]];
+    const step=origin.map((v,k)=>(domain[2*k+1]-v)/n);
+    const size=n+1,field=new Float64Array(size**3);
+    let index=0;
+    for(let k=0;k<size;k++)for(let j=0;j<size;j++)for(let i=0;i<size;i++){
+      const x=origin[0]+i*step[0],y=origin[1]+j*step[1],z=origin[2]+k*step[2];
+      const v=fn(x,y,z);
+      if(!Number.isFinite(v))throw Error('Undefined field at ('+[x,y,z].map(a=>a.toFixed(3)).join(', ')+'). Adjust the equation or bounds.');
+      field[index++]=v;
+    }
+    const {vertices:solidVertices,faces,caps,surfaceCount}=SurfaceContour.extract(field,[size,size,size],origin,step,true);
+    if(!faces.length)throw Error('No surface crossing found. Check the equation, widen the bounds or increase resolution.');
+    const vertices=solidVertices.slice(0,surfaceCount);
+    // A field gradient gives smooth offsets even next to a very skinny triangle.
+    // Fall back to its mesh normal where a derivative is undefined.
+    const fieldNormal=p=>{
+      const f=fn(...p);
+      const g=step.map((s,k)=>{
+        const h=s*.001,q=p.slice();q[k]+=h;const hi=fn(...q);
+        q[k]=p[k]-h;const lo=fn(...q);
+        return Number.isFinite(hi)&&Number.isFinite(lo)?(hi-lo)/(2*h):Number.isFinite(hi)?(hi-f)/h:(f-lo)/h;
+      });
+      return g.every(Number.isFinite)&&Math.hypot(...g)>0?SurfaceMath.unit(g):null;
+    };
+    return {shape,n,nv:n,vertices,faces,solidVertices,solidFaces:faces.concat(caps),fieldNormal,...bounds(vertices),solidBounds:bounds(solidVertices)};
+  }
+  // Keep implicit geometry at its natural proportions, including vertical sheets.
   function transform(mesh,width,relief) {
     const span=mesh.max.map((v,k)=>v-mesh.min[k]);
     const scale=width/Math.max(span[0],span[1]);
-    const zScale=span[2] ? relief/span[2] : 0;
+    const zScale=mesh.shape==='implicit'?scale:span[2]?relief/span[2]:0;
     return ([x,y,z])=>[(x-(mesh.min[0]+span[0]/2))*scale,(y-(mesh.min[1]+span[1]/2))*scale,(z-mesh.min[2])*zScale];
   }
-  function surfaceShell(points,triangles,boundary,thickness,heightGraph) {
+  // Each edge of a printable boundary has two oppositely wound triangles.
+  // For a thickened sheet also recover its oriented rim before offsetting it.
+  function implicitEdges(faces,count,closed){
+    const edges=new Map();
+    for(const [a,b,c] of faces)for(const [i,j] of [[a,b],[b,c],[c,a]]){
+      const key=Math.min(i,j)*count+Math.max(i,j),direction=i<j?1:-1,previous=edges.get(key);
+      if(previous===undefined)edges.set(key,direction);
+      else if(previous===-direction)edges.set(key,0);
+      else throw Error('The surface meets itself at this resolution. Adjust the equation, bounds or resolution before printing.');
+    }
+    const rim=[];
+    for(const [key,direction] of edges)if(direction){
+      if(closed)throw Error('The filled mesh has an open edge. Adjust the bounds or resolution before printing.');
+      const i=Math.floor(key/count),j=key%count;rim.push(direction>0?[i,j]:[j,i]);
+    }
+    return rim;
+  }
+  function surfaceShell(points,triangles,boundary,thickness,heightGraph,directions) {
     // Accumulate area-weighted normals after scaling into physical millimeters.
     const normals=points.map(()=>[0,0,0]);
     for(const triangle of triangles) {
@@ -499,7 +640,7 @@ const SurfaceWall=(()=>{
     const count=points.length, vertices=new Array(2*count);
     let lowest=Infinity;
     for(let i=0;i<count;i++) {
-      const direction=SurfaceMath.unit(normals[i]);
+      const direction=directions?.[i]??SurfaceMath.unit(normals[i]);
       const offset=direction.map(v=>v*thickness/2);
       vertices[i]=points[i].map((v,k)=>v+offset[k]);
       vertices[count+i]=points[i].map((v,k)=>v-offset[k]);
@@ -524,6 +665,16 @@ const SurfaceWall=(()=>{
   }
   function solid(mesh,width,relief,thickness,construction='base') {
     if (![width,relief,thickness].every(v=>Number.isFinite(v)&&v>0)) throw Error('Print dimensions must be positive.');
+    if(mesh.shape==='implicit'){
+      if(construction==='shell'){
+        mesh.rim??=implicitEdges(mesh.faces,mesh.vertices.length,false);
+        mesh.normals??=mesh.vertices.map(mesh.fieldNormal);
+        return surfaceShell(mesh.vertices.map(transform(mesh,width,relief)),mesh.faces,mesh.rim,thickness,false,mesh.normals);
+      }
+      if(!mesh.checked){implicitEdges(mesh.solidFaces,mesh.solidVertices.length,true);mesh.checked=true;}
+      const convert=transform({shape:mesh.shape,...mesh.solidBounds},width,relief);
+      return {vertices:mesh.solidVertices.map(convert),faces:mesh.solidFaces};
+    }
     const convert=transform(mesh,width,relief), vertices=mesh.vertices.map(convert), faces=mesh.faces.slice();
     const {n,nv,at,shape}=mesh;
     if(mesh.twisted||mesh.collapsedBoundary) return SurfaceWall.fused(mesh,vertices,width,relief,thickness);
@@ -671,10 +822,13 @@ const SurfaceWall=(()=>{
     ctx.setTransform(dpi,0,0,dpi,0,0);ctx.clearRect(0,0,w,h);
     const mini=options.mini, az=options.az??-0.67, el=options.el??0.43;
     const sinA=Math.sin(az),cosA=Math.cos(az),sinE=Math.sin(el),cosE=Math.cos(el);
-    const width=options.width||100, relief=options.relief??42,base=options.base||0;
+    const width=options.width||100,base=options.base||0;
+    let relief=options.relief??42;
     const printable=Boolean(options.solid);
     const convert=SurfaceGeometry.transform(mesh,width,relief);
-    const vertices=(printable?options.solid.vertices:mesh.vertices.map(convert)).map(([x,y,z])=>[x/width,y/width,(z-(relief+base)/2)/width]);
+    const physical=printable?options.solid.vertices:mesh.vertices.map(convert);
+    if(mesh.shape==='implicit')relief=physical.reduce((top,p)=>Math.max(top,p[2]),0);
+    const vertices=physical.map(([x,y,z])=>[x/width,y/width,(z-(relief+base)/2)/width]);
     function raw(x,y,z){
       const depth=-x*sinA+y*cosA;
       return [x*cosA+y*sinA, -(depth*sinE+z*cosE),depth*cosE-z*sinE];
@@ -710,7 +864,7 @@ const SurfaceWall=(()=>{
       axis([0,0,floor],[0,0,Math.max(.52,relief/width*.6)],'Z','#9c99c4');
     }
     const color=rgb(options.color||'#ac85ff'), light=[-.47,-.38,.79];
-    const polygons=printable?options.solid.faces:mesh.quads;
+    const polygons=printable?options.solid.faces:mesh.quads??mesh.faces;
     const sorted=polygons.map(ids=>[ids,ids.reduce((s,j)=>s+pts[j][2],0)/ids.length]).sort((a,b)=>b[1]-a[1]);
     ctx.lineJoin='round';
     for(const [ids] of sorted){
@@ -718,7 +872,7 @@ const SurfaceWall=(()=>{
       const normal=SurfaceMath.cross(b.map((v,k)=>v-a[k]),c.map((v,k)=>v-a[k]));
       const len=Math.hypot(...normal)||1;
       const incidence=normal.reduce((s,v,k)=>s+v*light[k],0)/len;
-      const elev=Math.max(0,Math.min(1,a[2]*width/relief+.5));
+      const elev=relief?Math.max(0,Math.min(1,a[2]*width/relief+.5)):.5;
       const diffuse=(.30+.46*Math.abs(incidence)+.24*elev);
       const face=color.map((v,k)=>Math.min(255,Math.round(v*diffuse*(k===0?.72+elev*.30:k===1?.64+elev*.39:1.04)+Math.max(0,incidence)*11)));
       ctx.beginPath();ctx.moveTo(...pts[i].slice(0,2));
@@ -727,7 +881,7 @@ const SurfaceWall=(()=>{
         ctx.fillStyle='rgb(32,30,38)';ctx.fill();ctx.strokeStyle='rgba('+color.join(',')+',.83)';ctx.lineWidth=.8;
       } else {
         ctx.fillStyle='rgb('+face.join(',')+')';ctx.fill();
-        const meshLines=(options.lines!==false && !printable);
+        const meshLines=(options.lines!==false && !printable && mesh.shape!=='implicit');
         ctx.strokeStyle=meshLines?'rgba(39,24,53,'+(mini?.45:.65)+')':ctx.fillStyle;
         ctx.lineWidth=meshLines?(mini?.52:.72):.7;
       }
@@ -777,6 +931,7 @@ const SurfaceWall=(()=>{
   const value=id=>$(id).valueAsNumber;
   const config=()=>({width:value('width'),relief:value('relief'),base:value('base'),construction:$('construction').value});
   let originalPreset,importVersion=0;
+  const equationMode=p=>p.shape==='implicit'?'implicit':p.shape?'parametric':'height';
   function name(){return presetId?originalPreset.name:'Custom surface';}
   function toast(message){$('toast').textContent=message;$('toast').classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toast').classList.remove('show'),2600);}
   function fieldError(id,message){$(id).textContent=message||'';$(id).hidden=!message;}
@@ -802,7 +957,7 @@ const SurfaceWall=(()=>{
   function clearResult(){result=null;$('optResult').textContent='';}
   function updateTitle(){
     $('plotName').textContent=name();
-    $('plotType').textContent=spec.shape?'PARAMETRIC SURFACE':'EXPLICIT SURFACE';
+    $('plotType').textContent=spec.shape==='implicit'?'IMPLICIT SURFACE':spec.shape?'PARAMETRIC SURFACE':'EXPLICIT SURFACE';
     document.querySelector('.surface-tag>span').style.background=color;
     for(const card of document.querySelectorAll('.preset-card')){
       const chosen=card.dataset.id===presetId;
@@ -821,7 +976,8 @@ const SurfaceWall=(()=>{
   function domainControls(){
     $('domainInputs').replaceChildren();
     $('domainHint').textContent='MIN / MAX';
-    for(const [idx,axis] of (spec.shape?['u','v']:['x','y']).entries()){
+    const axes=spec.shape==='implicit'?['x','y','z']:spec.shape?['u','v']:['x','y'];
+    for(const [idx,axis] of axes.entries()){
       const row=document.createElement('div');row.className='number-pair';
       row.innerHTML='<span>'+axis+'</span><input type="number" step="any" aria-label="'+axis.toUpperCase()+' minimum"><span class="to">→</span><input type="number" step="any" aria-label="'+axis.toUpperCase()+' maximum">';
       [...row.querySelectorAll('input')].forEach((input,k)=>{input.value=spec.domain[idx*2+k];input.oninput=()=>{spec.domain[idx*2+k]=input.valueAsNumber;refresh();if(valid)resetStart();};});
@@ -847,7 +1003,7 @@ const SurfaceWall=(()=>{
     }
     $('exportButton').disabled=!valid;$('runOpt').disabled=!valid||Boolean(spec.shape);
     const sizes=valid?[mesh.n,mesh.nv]:sampling();
-    $('resValue').textContent=sizes.join(' × ');
+    $('resValue').textContent=spec.shape==='implicit'?value('resolution')+'³ cells':sizes.join(' × ');
     $('resolution').style.setProperty('--fill',((value('resolution')-Number($('resolution').min))/(Number($('resolution').max)-Number($('resolution').min))*100)+'%');
     updateTitle();redraw();
   }
@@ -859,16 +1015,18 @@ const SurfaceWall=(()=>{
   function choose(p,readyMesh){
     originalPreset=p;importVersion++;fieldError('importError','');
     presetId=p.id;spec={...p,domain:p.domain?.slice()};color=p.color;
+    const type=equationMode(p),implicit=type==='implicit',parametric=type==='parametric';
+    $('equationMode').value=type;
     $('expression').value=spec.formula;
-    $('expression').rows=p.shape?Math.min(8,Math.max(3,p.formula.split('\n').length+1)):p.formula.length>55?2:1;
-    $('expression').classList.toggle('parametric-expression',Boolean(p.shape));
-    $('parametricHelp').hidden=!p.shape;
-    $('exprType').textContent=p.shape?'r(u, v)':'z = f(x, y)';
+    $('expression').rows=parametric?Math.min(8,Math.max(3,p.formula.split('\n').length+1)):p.formula.length>40?2:1;
+    $('expression').classList.toggle('parametric-expression',parametric);
+    $('parametricHelp').hidden=!parametric;$('implicitHelp').hidden=!implicit;
     $('width').value=100;$('relief').value=p.relief;$('base').value=2;
-    $('resolution').min=p.grid?4:16;$('resolution').max=p.grid?Math.max(256,...p.grid):128;$('resolution').step=p.grid?1:4;
-    $('resolution').value=p.grid?Math.max(...p.grid):64;$('construction').value='base';
+    $('resolution').min=implicit?8:p.grid?4:16;$('resolution').max=implicit?48:p.grid?Math.max(256,...p.grid):128;$('resolution').step=p.grid?1:4;
+    $('resolution').value=implicit?24:p.grid?Math.max(...p.grid):64;$('construction').value='base';
     domainControls();colorControls();resetStart();resetCamera();refresh(readyMesh);setOptimizer(optimizing);
   }
+  $('equationMode').onchange=()=>choose(presets.find(p=>equationMode(p)===$('equationMode').value));
   $('expression').oninput=()=>{
     spec.formula=$('expression').value;
     presetId=originalPreset.formula===spec.formula?originalPreset.id:null;
@@ -915,7 +1073,7 @@ const SurfaceWall=(()=>{
   });
   const thumbMeshes=new Map();
   function thumb(canvas,p){
-    if(!thumbMeshes.has(p.id))thumbMeshes.set(p.id,sample(p,p.shape?32:26));
+    if(!thumbMeshes.has(p.id))thumbMeshes.set(p.id,sample(p,p.shape==='implicit'?12:p.shape?32:26));
     draw(canvas,thumbMeshes.get(p.id),{mini:true,color:p.color,relief:p.relief,el:p.shape==='torus'?.61:.43});
   }
   function renderCards(container,items){
@@ -943,13 +1101,16 @@ const SurfaceWall=(()=>{
   }
   let savedPrintSettings;
   function showConstructionFields(){
-    const shell=!spec.shape&&$('construction').value==='shell';
+    const implicit=spec.shape==='implicit',shell=(!spec.shape||implicit)&&$('construction').value==='shell';
     const closed=mesh.periodicU&&mesh.periodicV;
-    $('constructionLabel').hidden=Boolean(spec.shape);
+    $('constructionLabel').hidden=Boolean(spec.shape)&&!implicit;
+    $('construction').options[0].textContent=implicit?'Filled region':'Flat base';
+    $('implicitPrintHint').hidden=!implicit||shell;
+    $('reliefLabel').hidden=implicit;$('relief').disabled=implicit;
     $('shellHint').hidden=!shell;
     $('twistHint').hidden=!mesh.twisted&&!mesh.collapsedBoundary;
     $('twistHint').textContent=mesh.twisted?'The surface twists through itself. Export creates a wall with an approximate thickness and fuses the crossing.':'A surface edge meets at a point. Export creates a wall of approximate thickness and joins overlapping regions.';
-    $('thicknessLabel').hidden=Boolean(spec.shape)&&closed&&!mesh.twisted&&!mesh.collapsedBoundary;
+    $('thicknessLabel').hidden=implicit?!shell:Boolean(spec.shape)&&closed&&!mesh.twisted&&!mesh.collapsedBoundary;
     $('base').disabled=$('thicknessLabel').hidden;
     $('thicknessName').textContent=mesh.radialWall?'Radial wall':spec.shape||shell?'Wall thickness':'Base thickness';
     $('widthName').textContent=shell?'Graph XY span':'Longest XY side';
@@ -980,13 +1141,13 @@ const SurfaceWall=(()=>{
   $('exportDialog').addEventListener('close',()=>{
     if(!savedPrintSettings)return;
     for(const [id,v] of Object.entries(savedPrintSettings))$(id).value=v;
-    $('base').disabled=false;refreshPrintMesh();redraw();
+    $('base').disabled=false;$('relief').disabled=false;refreshPrintMesh();redraw();
   });
   $('exportForm').onsubmit=e=>{
     e.preventDefault();const m=updateExport();if(!m)return;
     try{
       const file=binarySTL(m,name());const url=URL.createObjectURL(new Blob([file],{type:'model/stl'}));
-      const shell=!spec.shape&&$('construction').value==='shell';
+      const shell=(!spec.shape||spec.shape==='implicit')&&$('construction').value==='shell';
       const suffix=shell?'-shell-'+value('base')+'mm':'';
       const a=document.createElement('a');a.href=url;a.download=(presetId||'custom-surface')+'-'+value('width')+'mm'+suffix+'.stl';
       document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),30000);
@@ -1043,9 +1204,10 @@ const SurfaceWall=(()=>{
     </section>
     <aside class="panel controls"><div class="panel-heading"><h2 id="controlsTitle"><i data-icon="sliders"></i>Surface controls</h2><button class="icon-btn" id="resetControls" aria-label="Restore preset defaults" title="Restore preset defaults"><i data-icon="reset"></i></button></div>
       <div class="control-content" id="editorPane">
-        <label class="field-title" for="expression">Expression <span class="muted mono" id="exprType">z = f(x, y)</span></label>
-        <div class="expr-box"><span class="fx">ƒ</span><textarea id="expression" spellcheck="false" aria-describedby="parametricHelp error"></textarea></div>
+        <div class="field-title"><label for="expression">Expression</label><select aria-label="Equation type" id="equationMode"><option value="height">Height · z = f(x, y)</option><option value="parametric">Parametric · r(u, v)</option><option value="implicit">Implicit · F(x, y, z) = 0</option></select></div>
+        <div class="expr-box"><span class="fx">ƒ</span><textarea id="expression" spellcheck="false" aria-describedby="parametricHelp implicitHelp error"></textarea></div>
         <p id="parametricHelp" class="param-note" hidden>Edit the (x, y, z) coordinates using u and v. You can define values on lines above the tuple.</p>
+        <p id="implicitHelp" class="param-note" hidden>Enter an equation in x, y and z, or an expression equal to zero. Set all three plotting bounds below.</p>
         <div class="control-section"><div class="field-title">Domain <span class="muted mini-label" id="domainHint">MIN / MAX</span></div><div id="domainInputs"></div></div>
         <div class="control-section"><label class="field-title" for="resolution">Mesh resolution <output id="resValue" class="value-chip"></output></label><input type="range" id="resolution" min="16" max="128" step="4" value="64"><div class="range-ends"><span>Coarse</span><span>Fine</span></div></div>
         <div class="control-section color-row"><span class="field-title">Surface color</span><div class="swatches" id="swatches" role="group" aria-label="Surface color"></div></div>
@@ -1069,9 +1231,10 @@ const SurfaceWall=(()=>{
     <div class="print-fields"><label id="constructionLabel">Mesh style<select id="construction"><option value="base">Flat base</option><option value="shell">Thickened surface</option></select></label>
     <label id="thicknessLabel"><span id="thicknessName">Base thickness</span> <span>(mm)</span><input type="number" id="base" min="0.1" max="100" step="any" required value="2"></label>
     <p id="shellHint" class="shell-hint" hidden>The wall follows both sides of the graph and closes at the edges. Solid dimensions include the wall.</p>
+    <p id="implicitPrintHint" class="shell-hint" hidden>The filled solid uses the side where the left expression is smaller and closes it at the plot bounds. Swap the two sides to fill the other region.</p>
     <p id="twistHint" class="shell-hint" hidden>The surface twists through itself. Export creates a wall with an approximate thickness and fuses the crossing.</p>
     <label><span id="widthName">Longest XY side</span> <span>(mm)</span><input type="number" id="width" min="5" max="1000" step="any" required value="100"></label>
-    <label>Surface relief <span>(mm)</span><input type="number" id="relief" min="0.1" max="1000" step="any" required value="58"></label>
+    <label id="reliefLabel">Surface relief <span>(mm)</span><input type="number" id="relief" min="0.1" max="1000" step="any" required value="58"></label>
     </div>
     <div class="export-summary"><span>Solid dimensions</span><strong id="dimensions"></strong><span>Binary STL</span><strong id="fileSize"></strong></div><p id="exportError" class="error" role="alert" hidden></p>
     <button class="primary full" type="submit" id="download"><i data-icon="download"></i>Download STL</button>
@@ -1079,6 +1242,8 @@ const SurfaceWall=(()=>{
 <dialog id="guideDialog"><div class="dialog-heading"><h2>Quick guide</h2><button class="close icon-btn" aria-label="Close guide"><i data-icon="close"></i></button></div><div class="guide-copy">
   <h3>Build a surface</h3><p>Choose a preset or enter a height equation in x and y. Try <code>cos(x) * sin(y)</code>. Choose a domain where the expression is finite and continuous. Changes update the preview automatically. Use ^ for powers, pi for π, and radians for angles.</p>
   <p>For a parametric surface, open Torus, Catenoid or Trefoil knot and edit the coordinate tuple in the expression field. On the torus, try changing <code>minor = 0.72</code> to <code>minor = 1</code> to thicken its ring. A tuple may also start with <code>r(u,v) =</code>. Matching domain edges join at a seam. Open sheets use the wall thickness in Export STL.</p>
+  <h3>Graph an implicit equation</h3><p>Select <b>Implicit</b> next to Expression. Try <code>x^2 + y^2 + z^2 = 1</code> for a sphere, or <code>x^2 + y^2 - z^2 = 1</code> for a hyperboloid. A bare expression is graphed at zero. Choose bounds where the field is continuous and crosses zero. A finer grid can reveal small features; a field that only touches zero, such as <code>z^2</code>, may be missed. Use <code>z = 0</code> for that plane.</p>
+  <p>In Export STL, <b>Filled region</b> closes the negative side at the plot bounds. <b>Thickened surface</b> adds a wall to the graph itself. Both preserve the equation’s proportions.</p>
   <details><summary>Supported functions</summary><p>sin, cos, tan, asin, acos, atan, sinh, cosh, tanh, exp, log (natural), log10, sqrt, abs, floor, ceil and sinc take one argument. min, max, pow, hypot, atan2 and rmod take two. sinc(0) is 1.</p></details>
   <h3>Piecewise and Origin formulas</h3><p>Use <code>if(x &lt; 0, -x, x)</code> or <code>x &lt; 0 ? -x : x</code> in a height or coordinate expression. Nest conditions for additional branches. Combine comparisons with <code>&amp;&amp;</code>, <code>||</code> and <code>!</code>.</p><p>Choose <b>Import Origin file</b> to load a 3D parametric Settings definition (.ofp or .xml). Surface Lab translates numeric declarations and coordinate helpers with return and if/else branches. Edit the translated tuple or find Klein bottle in the preset library.</p>
   <h3>Explore the mesh</h3><p>Drag to orbit or scroll to zoom. Focus the preview and use arrow keys or + and − for keyboard control. Wireframe shows sampling density. Print mesh shows the solid geometry.</p>

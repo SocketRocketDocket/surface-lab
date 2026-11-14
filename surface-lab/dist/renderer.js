@@ -11,10 +11,13 @@ const SurfaceRender = (() => {
     ctx.setTransform(dpi,0,0,dpi,0,0);ctx.clearRect(0,0,w,h);
     const mini=options.mini, az=options.az??-0.67, el=options.el??0.43;
     const sinA=Math.sin(az),cosA=Math.cos(az),sinE=Math.sin(el),cosE=Math.cos(el);
-    const width=options.width||100, relief=options.relief??42,base=options.base||0;
+    const width=options.width||100,base=options.base||0;
+    let relief=options.relief??42;
     const printable=Boolean(options.solid);
     const convert=SurfaceGeometry.transform(mesh,width,relief);
-    const vertices=(printable?options.solid.vertices:mesh.vertices.map(convert)).map(([x,y,z])=>[x/width,y/width,(z-(relief+base)/2)/width]);
+    const physical=printable?options.solid.vertices:mesh.vertices.map(convert);
+    if(mesh.shape==='implicit')relief=physical.reduce((top,p)=>Math.max(top,p[2]),0);
+    const vertices=physical.map(([x,y,z])=>[x/width,y/width,(z-(relief+base)/2)/width]);
     function raw(x,y,z){
       const depth=-x*sinA+y*cosA;
       return [x*cosA+y*sinA, -(depth*sinE+z*cosE),depth*cosE-z*sinE];
@@ -50,7 +53,7 @@ const SurfaceRender = (() => {
       axis([0,0,floor],[0,0,Math.max(.52,relief/width*.6)],'Z','#9c99c4');
     }
     const color=rgb(options.color||'#ac85ff'), light=[-.47,-.38,.79];
-    const polygons=printable?options.solid.faces:mesh.quads;
+    const polygons=printable?options.solid.faces:mesh.quads??mesh.faces;
     const sorted=polygons.map(ids=>[ids,ids.reduce((s,j)=>s+pts[j][2],0)/ids.length]).sort((a,b)=>b[1]-a[1]);
     ctx.lineJoin='round';
     for(const [ids] of sorted){
@@ -58,7 +61,7 @@ const SurfaceRender = (() => {
       const normal=SurfaceMath.cross(b.map((v,k)=>v-a[k]),c.map((v,k)=>v-a[k]));
       const len=Math.hypot(...normal)||1;
       const incidence=normal.reduce((s,v,k)=>s+v*light[k],0)/len;
-      const elev=Math.max(0,Math.min(1,a[2]*width/relief+.5));
+      const elev=relief?Math.max(0,Math.min(1,a[2]*width/relief+.5)):.5;
       const diffuse=(.30+.46*Math.abs(incidence)+.24*elev);
       const face=color.map((v,k)=>Math.min(255,Math.round(v*diffuse*(k===0?.72+elev*.30:k===1?.64+elev*.39:1.04)+Math.max(0,incidence)*11)));
       ctx.beginPath();ctx.moveTo(...pts[i].slice(0,2));
@@ -67,7 +70,7 @@ const SurfaceRender = (() => {
         ctx.fillStyle='rgb(32,30,38)';ctx.fill();ctx.strokeStyle='rgba('+color.join(',')+',.83)';ctx.lineWidth=.8;
       } else {
         ctx.fillStyle='rgb('+face.join(',')+')';ctx.fill();
-        const meshLines=(options.lines!==false && !printable);
+        const meshLines=(options.lines!==false && !printable && mesh.shape!=='implicit');
         ctx.strokeStyle=meshLines?'rgba(39,24,53,'+(mini?.45:.65)+')':ctx.fillStyle;
         ctx.lineWidth=meshLines?(mini?.52:.72):.7;
       }

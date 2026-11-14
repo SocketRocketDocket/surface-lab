@@ -5,7 +5,7 @@
   <meta name="theme-color" content="#111313"><meta name="description" content="Explore mathematical surfaces, edit equations, run numerical optimizers, and export solid STL meshes.">
   <title>Surface Lab — Surface studio</title>
   <link rel="icon" href="mark.svg" type="image/svg+xml"><link rel="stylesheet" href="style.css">
-  <script defer src="math.js"></script><script defer src="origin.js"></script><script defer src="wall.js"></script><script defer src="mesh.js"></script><script defer src="optimizer.js"></script><script defer src="renderer.js"></script><script defer src="app.js"></script>
+  <script defer src="math.js"></script><script defer src="origin.js"></script><script defer src="contour.js"></script><script defer src="wall.js"></script><script defer src="mesh.js"></script><script defer src="optimizer.js"></script><script defer src="renderer.js"></script><script defer src="app.js"></script>
 </head>
 <body>
 <header class="topbar"><div class="header-inner">
@@ -32,9 +32,10 @@
     </section>
     <aside class="panel controls"><div class="panel-heading"><h2 id="controlsTitle"><i data-icon="sliders"></i>Surface controls</h2><button class="icon-btn" id="resetControls" aria-label="Restore preset defaults" title="Restore preset defaults"><i data-icon="reset"></i></button></div>
       <div class="control-content" id="editorPane">
-        <label class="field-title" for="expression">Expression <span class="muted mono" id="exprType">z = f(x, y)</span></label>
-        <div class="expr-box"><span class="fx">ƒ</span><textarea id="expression" spellcheck="false" aria-describedby="parametricHelp error"></textarea></div>
+        <div class="field-title"><label for="expression">Expression</label><select aria-label="Equation type" id="equationMode"><option value="height">Height · z = f(x, y)</option><option value="parametric">Parametric · r(u, v)</option><option value="implicit">Implicit · F(x, y, z) = 0</option></select></div>
+        <div class="expr-box"><span class="fx">ƒ</span><textarea id="expression" spellcheck="false" aria-describedby="parametricHelp implicitHelp error"></textarea></div>
         <p id="parametricHelp" class="param-note" hidden>Edit the (x, y, z) coordinates using u and v. You can define values on lines above the tuple.</p>
+        <p id="implicitHelp" class="param-note" hidden>Enter an equation in x, y and z, or an expression equal to zero. Set all three plotting bounds below.</p>
         <div class="control-section"><div class="field-title">Domain <span class="muted mini-label" id="domainHint">MIN / MAX</span></div><div id="domainInputs"></div></div>
         <div class="control-section"><label class="field-title" for="resolution">Mesh resolution <output id="resValue" class="value-chip"></output></label><input type="range" id="resolution" min="16" max="128" step="4" value="64"><div class="range-ends"><span>Coarse</span><span>Fine</span></div></div>
         <div class="control-section color-row"><span class="field-title">Surface color</span><div class="swatches" id="swatches" role="group" aria-label="Surface color"></div></div>
@@ -58,9 +59,10 @@
     <div class="print-fields"><label id="constructionLabel">Mesh style<select id="construction"><option value="base">Flat base</option><option value="shell">Thickened surface</option></select></label>
     <label id="thicknessLabel"><span id="thicknessName">Base thickness</span> <span>(mm)</span><input type="number" id="base" min="0.1" max="100" step="any" required value="2"></label>
     <p id="shellHint" class="shell-hint" hidden>The wall follows both sides of the graph and closes at the edges. Solid dimensions include the wall.</p>
+    <p id="implicitPrintHint" class="shell-hint" hidden>The filled solid uses the side where the left expression is smaller and closes it at the plot bounds. Swap the two sides to fill the other region.</p>
     <p id="twistHint" class="shell-hint" hidden>The surface twists through itself. Export creates a wall with an approximate thickness and fuses the crossing.</p>
     <label><span id="widthName">Longest XY side</span> <span>(mm)</span><input type="number" id="width" min="5" max="1000" step="any" required value="100"></label>
-    <label>Surface relief <span>(mm)</span><input type="number" id="relief" min="0.1" max="1000" step="any" required value="58"></label>
+    <label id="reliefLabel">Surface relief <span>(mm)</span><input type="number" id="relief" min="0.1" max="1000" step="any" required value="58"></label>
     </div>
     <div class="export-summary"><span>Solid dimensions</span><strong id="dimensions"></strong><span>Binary STL</span><strong id="fileSize"></strong></div><p id="exportError" class="error" role="alert" hidden></p>
     <button class="primary full" type="submit" id="download"><i data-icon="download"></i>Download STL</button>
@@ -68,6 +70,8 @@
 <dialog id="guideDialog"><div class="dialog-heading"><h2>Quick guide</h2><button class="close icon-btn" aria-label="Close guide"><i data-icon="close"></i></button></div><div class="guide-copy">
   <h3>Build a surface</h3><p>Choose a preset or enter a height equation in x and y. Try <code>cos(x) * sin(y)</code>. Choose a domain where the expression is finite and continuous. Changes update the preview automatically. Use ^ for powers, pi for π, and radians for angles.</p>
   <p>For a parametric surface, open Torus, Catenoid or Trefoil knot and edit the coordinate tuple in the expression field. On the torus, try changing <code>minor = 0.72</code> to <code>minor = 1</code> to thicken its ring. A tuple may also start with <code>r(u,v) =</code>. Matching domain edges join at a seam. Open sheets use the wall thickness in Export STL.</p>
+  <h3>Graph an implicit equation</h3><p>Select <b>Implicit</b> next to Expression. Try <code>x^2 + y^2 + z^2 = 1</code> for a sphere, or <code>x^2 + y^2 - z^2 = 1</code> for a hyperboloid. A bare expression is graphed at zero. Choose bounds where the field is continuous and crosses zero. A finer grid can reveal small features; a field that only touches zero, such as <code>z^2</code>, may be missed. Use <code>z = 0</code> for that plane.</p>
+  <p>In Export STL, <b>Filled region</b> closes the negative side at the plot bounds. <b>Thickened surface</b> adds a wall to the graph itself. Both preserve the equation’s proportions.</p>
   <details><summary>Supported functions</summary><p>sin, cos, tan, asin, acos, atan, sinh, cosh, tanh, exp, log (natural), log10, sqrt, abs, floor, ceil and sinc take one argument. min, max, pow, hypot, atan2 and rmod take two. sinc(0) is 1.</p></details>
   <h3>Piecewise and Origin formulas</h3><p>Use <code>if(x &lt; 0, -x, x)</code> or <code>x &lt; 0 ? -x : x</code> in a height or coordinate expression. Nest conditions for additional branches. Combine comparisons with <code>&amp;&amp;</code>, <code>||</code> and <code>!</code>.</p><p>Choose <b>Import Origin file</b> to load a 3D parametric Settings definition (.ofp or .xml). Surface Lab translates numeric declarations and coordinate helpers with return and if/else branches. Edit the translated tuple or find Klein bottle in the preset library.</p>
   <h3>Explore the mesh</h3><p>Drag to orbit or scroll to zoom. Focus the preview and use arrow keys or + and − for keyboard control. Wireframe shows sampling density. Print mesh shows the solid geometry.</p>

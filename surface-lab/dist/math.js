@@ -9,7 +9,7 @@ const SurfaceMath = (() => {
     rmod: (x,y) => x%y
   };
   function compile(source,parameters=['x','y'],locals=Object.create(null)) {
-    const clean = (parameters[0]==='x'?source.trim().replace(/^z\s*=\s*/i,''):source.trim()).toLowerCase()
+    const clean = (parameters.length===2 && parameters[0]==='x'?source.trim().replace(/^z\s*=\s*/i,''):source.trim()).toLowerCase()
       .replaceAll('π','pi').replaceAll('²','^2').replaceAll('³','^3').replaceAll('−','-')
       .replaceAll('×','*').replaceAll('÷','/').replaceAll('**','^');
     if (!clean || clean.length > 8192) throw Error('Enter an expression of up to 8192 characters.');
@@ -23,8 +23,12 @@ const SurfaceMath = (() => {
         return expr;
       }
       if (t && t === parameters[0]) return x => x;
-      if (t && t === parameters[1]) return (x,y) => y;
-      if (t === parameters.join('')) return (x,y) => x*y;
+      if (t && t === parameters[1]) return (x,y,z) => y;
+      if (parameters.length===3 && t===parameters[2]) return (x,y,z)=>z;
+      if (t === parameters[0]+parameters[1]) return (x,y,z)=>x*y;
+      if (parameters.length===3 && t==='xz') return (x,y,z)=>x*z;
+      if (parameters.length===3 && t==='yz') return (x,y,z)=>y*z;
+      if (parameters.length===3 && t==='xyz') return (x,y,z)=>x*y*z;
       if (Object.hasOwn(locals,t)) return () => locals[t];
       if (t === 'pi' || t === 'e') return () => t === 'pi' ? Math.PI : Math.E;
       if (t && /^\d|^\./.test(t) && Number.isFinite(Number(t))) return () => Number(t);
@@ -36,7 +40,7 @@ const SurfaceMath = (() => {
         if(tokens[i++]!==',') throw Error('Add a false value to the conditional.');
         const no=conditional();
         if(tokens[i++]!==')') throw Error('Check the conditional parentheses.');
-        return (x,y)=>test(x,y)?yes(x,y):no(x,y);
+        return (x,y,z)=>test(x,y,z)?yes(x,y,z):no(x,y,z);
       }
       if (Object.hasOwn(functions,t)) {
         if (tokens[i++] !== '(') throw Error('Use parentheses around function arguments.');
@@ -46,19 +50,19 @@ const SurfaceMath = (() => {
         if (tokens[i++] !== ')') throw Error('Check the function parentheses.');
         const binary = ['min','max','atan2','hypot','pow','rmod'].includes(t);
         if (binary !== Boolean(second)) throw Error(t + ' takes ' + (binary ? 'two arguments.' : 'one argument.'));
-        return second ? (x,y) => functions[t](first(x,y),second(x,y)) : (x,y) => functions[t](first(x,y));
+        return second ? (x,y,z) => functions[t](first(x,y,z),second(x,y,z)) : (x,y,z) => functions[t](first(x,y,z));
       }
       throw Error(t ? 'Unrecognized term “' + t + '”.' : 'The expression is incomplete.');
     }
     function power() {
       const a = atom();
       if (tokens[i] !== '^') return a;
-      i++; const b = unary(); return (x,y) => a(x,y) ** b(x,y);
+      i++; const b = unary(); return (x,y,z) => a(x,y,z) ** b(x,y,z);
     }
     function unary() {
-      if (tokens[i] === '-') { i++; const a = unary(); return (x,y) => -a(x,y); }
+      if (tokens[i] === '-') { i++; const a = unary(); return (x,y,z) => -a(x,y,z); }
       if (tokens[i] === '+') { i++; return unary(); }
-      if (tokens[i] === '!') { i++; const a=unary(); return (x,y)=>Number(!a(x,y)); }
+      if (tokens[i] === '!') { i++; const a=unary(); return (x,y,z)=>Number(!a(x,y,z)); }
       return power();
     }
     function product() {
@@ -69,7 +73,7 @@ const SurfaceMath = (() => {
         if (!implicit && t !== '*' && t !== '/') break;
         if (!implicit) i++;
         const left = expr, right = unary();
-        expr = t === '/' ? (x,y) => left(x,y)/right(x,y) : (x,y) => left(x,y)*right(x,y);
+        expr = t === '/' ? (x,y,z) => left(x,y,z)/right(x,y,z) : (x,y,z) => left(x,y,z)*right(x,y,z);
       }
       return expr;
     }
@@ -77,7 +81,7 @@ const SurfaceMath = (() => {
       let expr = product();
       while (tokens[i] === '+' || tokens[i] === '-') {
         const t = tokens[i++], left = expr, right = product();
-        expr = t === '+' ? (x,y) => left(x,y)+right(x,y) : (x,y) => left(x,y)-right(x,y);
+        expr = t === '+' ? (x,y,z) => left(x,y,z)+right(x,y,z) : (x,y,z) => left(x,y,z)-right(x,y,z);
       }
       return expr;
     }
@@ -87,7 +91,7 @@ const SurfaceMath = (() => {
       let expr=next();
       while(Object.hasOwn(operations,tokens[i])){
         const op=operations[tokens[i++]],left=expr,right=next();
-        expr=(x,y)=>Number(op(left(x,y),right(x,y)));
+        expr=(x,y,z)=>Number(op(left(x,y,z),right(x,y,z)));
       }
       return expr;
     }
@@ -95,20 +99,42 @@ const SurfaceMath = (() => {
     const equal=()=>compare(relational,equality);
     function and(){
       let expr=equal();
-      while(tokens[i]==='&&'){i++;const left=expr,right=equal();expr=(x,y)=>Number(Boolean(left(x,y)&&right(x,y)));}
+      while(tokens[i]==='&&'){i++;const left=expr,right=equal();expr=(x,y,z)=>Number(Boolean(left(x,y,z)&&right(x,y,z)));}
       return expr;
     }
     function conditional(){
       let test=and();
-      while(tokens[i]==='||'){i++;const left=test,right=and();test=(x,y)=>Number(Boolean(left(x,y)||right(x,y)));}
+      while(tokens[i]==='||'){i++;const left=test,right=and();test=(x,y,z)=>Number(Boolean(left(x,y,z)||right(x,y,z)));}
       if(tokens[i]!=='?') return test;
       i++;const yes=conditional();
       if(tokens[i++]!==':') throw Error('Add a colon and a false value after the question mark.');
-      const no=conditional();return (x,y)=>test(x,y)?yes(x,y):no(x,y);
+      const no=conditional();return (x,y,z)=>test(x,y,z)?yes(x,y,z):no(x,y,z);
     }
     const result = conditional();
     if (i !== tokens.length) throw Error('Check the expression near “' + tokens[i] + '”.');
     return result;
+  }
+  function compileImplicit(source) {
+    // Only a single, top-level equals sign separates the sides. Comparisons
+    // inside a piecewise expression belong to the ordinary expression parser.
+    let depth=0,split=-1;
+    for(let i=0;i<source.length;i++){
+      const c=source[i];
+      if(c==='(')depth++;
+      else if(c===')')depth--;
+      else if(c==='='&&depth===0&&source[i+1]!=='='&&!/[<>=!]/.test(source[i-1]||' ')){
+        if(split>=0)throw Error('Enter one equation, with a single = between its two sides.');
+        split=i;
+      }
+    }
+    const vars=['x','y','z'];
+    if(split<0){
+      if(/[<>=!]/.test(source)&&!/[?:]|\b(?:if|piecewise)\s*\(/i.test(source))
+        throw Error('Use a single = for an implicit equation, or enter an expression equal to zero.');
+      return compile(source,vars);
+    }
+    const left=compile(source.slice(0,split),vars),right=compile(source.slice(split+1),vars);
+    return (x,y,z)=>left(x,y,z)-right(x,y,z);
   }
   function compileParametric(source) {
     if(source.length>24576) throw Error('Use up to 24576 characters for a parametric surface.');
@@ -179,7 +205,10 @@ const SurfaceMath = (() => {
     'cx = 6*cos(u)*(1+sin(u))','cy = 16*sin(u)',
     '(cx + if(first, radius*cos(u)*cos(v), radius*cos(v+pi)), cy + if(first, radius*sin(u)*cos(v), 0), radius*sin(v))'
   ].join('\n'),[0,tau,0,tau],'#79baca',40,'parametric');
+  add('sphere','Sphere','Implicit','x^2 + y^2 + z^2 = 1',[-1.2,1.2,-1.2,1.2,-1.2,1.2],'#7da9ff',100,'implicit');
+  add('gyroid','Gyroid','Implicit','sin(x)*cos(y) + sin(y)*cos(z) + sin(z)*cos(x) = 0',[-Math.PI,Math.PI,-Math.PI,Math.PI,-Math.PI,Math.PI],'#57d5c7',100,'implicit');
+  add('hyperboloid','One-sheet hyperboloid','Implicit','x^2 + y^2 - z^2 = 1',[-2,2,-2,2,-1.5,1.5],'#f38fc0',100,'implicit');
   const cross = (a,b) => [a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]];
   const unit = v => { const l=Math.hypot(...v); return v.map(k=>k/l); };
-  return {compile,compileParametric,presets,cross,unit};
+  return {compile,compileImplicit,compileParametric,presets,cross,unit};
 })();

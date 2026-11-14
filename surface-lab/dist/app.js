@@ -25,6 +25,7 @@
   const value=id=>$(id).valueAsNumber;
   const config=()=>({width:value('width'),relief:value('relief'),base:value('base'),construction:$('construction').value});
   let originalPreset,importVersion=0;
+  const equationMode=p=>p.shape==='implicit'?'implicit':p.shape?'parametric':'height';
   function name(){return presetId?originalPreset.name:'Custom surface';}
   function toast(message){$('toast').textContent=message;$('toast').classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toast').classList.remove('show'),2600);}
   function fieldError(id,message){$(id).textContent=message||'';$(id).hidden=!message;}
@@ -50,7 +51,7 @@
   function clearResult(){result=null;$('optResult').textContent='';}
   function updateTitle(){
     $('plotName').textContent=name();
-    $('plotType').textContent=spec.shape?'PARAMETRIC SURFACE':'EXPLICIT SURFACE';
+    $('plotType').textContent=spec.shape==='implicit'?'IMPLICIT SURFACE':spec.shape?'PARAMETRIC SURFACE':'EXPLICIT SURFACE';
     document.querySelector('.surface-tag>span').style.background=color;
     for(const card of document.querySelectorAll('.preset-card')){
       const chosen=card.dataset.id===presetId;
@@ -69,7 +70,8 @@
   function domainControls(){
     $('domainInputs').replaceChildren();
     $('domainHint').textContent='MIN / MAX';
-    for(const [idx,axis] of (spec.shape?['u','v']:['x','y']).entries()){
+    const axes=spec.shape==='implicit'?['x','y','z']:spec.shape?['u','v']:['x','y'];
+    for(const [idx,axis] of axes.entries()){
       const row=document.createElement('div');row.className='number-pair';
       row.innerHTML='<span>'+axis+'</span><input type="number" step="any" aria-label="'+axis.toUpperCase()+' minimum"><span class="to">→</span><input type="number" step="any" aria-label="'+axis.toUpperCase()+' maximum">';
       [...row.querySelectorAll('input')].forEach((input,k)=>{input.value=spec.domain[idx*2+k];input.oninput=()=>{spec.domain[idx*2+k]=input.valueAsNumber;refresh();if(valid)resetStart();};});
@@ -95,7 +97,7 @@
     }
     $('exportButton').disabled=!valid;$('runOpt').disabled=!valid||Boolean(spec.shape);
     const sizes=valid?[mesh.n,mesh.nv]:sampling();
-    $('resValue').textContent=sizes.join(' × ');
+    $('resValue').textContent=spec.shape==='implicit'?value('resolution')+'³ cells':sizes.join(' × ');
     $('resolution').style.setProperty('--fill',((value('resolution')-Number($('resolution').min))/(Number($('resolution').max)-Number($('resolution').min))*100)+'%');
     updateTitle();redraw();
   }
@@ -107,16 +109,18 @@
   function choose(p,readyMesh){
     originalPreset=p;importVersion++;fieldError('importError','');
     presetId=p.id;spec={...p,domain:p.domain?.slice()};color=p.color;
+    const type=equationMode(p),implicit=type==='implicit',parametric=type==='parametric';
+    $('equationMode').value=type;
     $('expression').value=spec.formula;
-    $('expression').rows=p.shape?Math.min(8,Math.max(3,p.formula.split('\n').length+1)):p.formula.length>55?2:1;
-    $('expression').classList.toggle('parametric-expression',Boolean(p.shape));
-    $('parametricHelp').hidden=!p.shape;
-    $('exprType').textContent=p.shape?'r(u, v)':'z = f(x, y)';
+    $('expression').rows=parametric?Math.min(8,Math.max(3,p.formula.split('\n').length+1)):p.formula.length>40?2:1;
+    $('expression').classList.toggle('parametric-expression',parametric);
+    $('parametricHelp').hidden=!parametric;$('implicitHelp').hidden=!implicit;
     $('width').value=100;$('relief').value=p.relief;$('base').value=2;
-    $('resolution').min=p.grid?4:16;$('resolution').max=p.grid?Math.max(256,...p.grid):128;$('resolution').step=p.grid?1:4;
-    $('resolution').value=p.grid?Math.max(...p.grid):64;$('construction').value='base';
+    $('resolution').min=implicit?8:p.grid?4:16;$('resolution').max=implicit?48:p.grid?Math.max(256,...p.grid):128;$('resolution').step=p.grid?1:4;
+    $('resolution').value=implicit?24:p.grid?Math.max(...p.grid):64;$('construction').value='base';
     domainControls();colorControls();resetStart();resetCamera();refresh(readyMesh);setOptimizer(optimizing);
   }
+  $('equationMode').onchange=()=>choose(presets.find(p=>equationMode(p)===$('equationMode').value));
   $('expression').oninput=()=>{
     spec.formula=$('expression').value;
     presetId=originalPreset.formula===spec.formula?originalPreset.id:null;
@@ -163,7 +167,7 @@
   });
   const thumbMeshes=new Map();
   function thumb(canvas,p){
-    if(!thumbMeshes.has(p.id))thumbMeshes.set(p.id,sample(p,p.shape?32:26));
+    if(!thumbMeshes.has(p.id))thumbMeshes.set(p.id,sample(p,p.shape==='implicit'?12:p.shape?32:26));
     draw(canvas,thumbMeshes.get(p.id),{mini:true,color:p.color,relief:p.relief,el:p.shape==='torus'?.61:.43});
   }
   function renderCards(container,items){
@@ -191,13 +195,16 @@
   }
   let savedPrintSettings;
   function showConstructionFields(){
-    const shell=!spec.shape&&$('construction').value==='shell';
+    const implicit=spec.shape==='implicit',shell=(!spec.shape||implicit)&&$('construction').value==='shell';
     const closed=mesh.periodicU&&mesh.periodicV;
-    $('constructionLabel').hidden=Boolean(spec.shape);
+    $('constructionLabel').hidden=Boolean(spec.shape)&&!implicit;
+    $('construction').options[0].textContent=implicit?'Filled region':'Flat base';
+    $('implicitPrintHint').hidden=!implicit||shell;
+    $('reliefLabel').hidden=implicit;$('relief').disabled=implicit;
     $('shellHint').hidden=!shell;
     $('twistHint').hidden=!mesh.twisted&&!mesh.collapsedBoundary;
     $('twistHint').textContent=mesh.twisted?'The surface twists through itself. Export creates a wall with an approximate thickness and fuses the crossing.':'A surface edge meets at a point. Export creates a wall of approximate thickness and joins overlapping regions.';
-    $('thicknessLabel').hidden=Boolean(spec.shape)&&closed&&!mesh.twisted&&!mesh.collapsedBoundary;
+    $('thicknessLabel').hidden=implicit?!shell:Boolean(spec.shape)&&closed&&!mesh.twisted&&!mesh.collapsedBoundary;
     $('base').disabled=$('thicknessLabel').hidden;
     $('thicknessName').textContent=mesh.radialWall?'Radial wall':spec.shape||shell?'Wall thickness':'Base thickness';
     $('widthName').textContent=shell?'Graph XY span':'Longest XY side';
@@ -228,13 +235,13 @@
   $('exportDialog').addEventListener('close',()=>{
     if(!savedPrintSettings)return;
     for(const [id,v] of Object.entries(savedPrintSettings))$(id).value=v;
-    $('base').disabled=false;refreshPrintMesh();redraw();
+    $('base').disabled=false;$('relief').disabled=false;refreshPrintMesh();redraw();
   });
   $('exportForm').onsubmit=e=>{
     e.preventDefault();const m=updateExport();if(!m)return;
     try{
       const file=binarySTL(m,name());const url=URL.createObjectURL(new Blob([file],{type:'model/stl'}));
-      const shell=!spec.shape&&$('construction').value==='shell';
+      const shell=(!spec.shape||spec.shape==='implicit')&&$('construction').value==='shell';
       const suffix=shell?'-shell-'+value('base')+'mm':'';
       const a=document.createElement('a');a.href=url;a.download=(presetId||'custom-surface')+'-'+value('width')+'mm'+suffix+'.stl';
       document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),30000);

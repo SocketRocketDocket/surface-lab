@@ -2,7 +2,13 @@
 
 Surface Lab turns mathematical surfaces into STL meshes for 3D printing. Download and extract this repository, then open **[Surface Lab.html](Surface%20Lab.html)** in your browser. The app runs offline.
 
-Choose from 18 presets or enter a height equation such as `sin(x) * cos(y)`. Adjust the domain and mesh resolution, then drag the preview to orbit. The optimizer can search a height graph for a minimum or maximum using Nelder–Mead, projected gradient descent, or multistage grid search.
+Choose from 21 presets or use the selector beside **Expression** to enter a height, parametric, or implicit equation. Adjust the domain and mesh resolution, then drag the preview to orbit. The optimizer can search a height graph for a minimum or maximum using Nelder–Mead, projected gradient descent, or multistage grid search.
+
+## Implicit surfaces
+
+Choose **Implicit** and enter `x^2 + y^2 + z^2 = 1` for a sphere. Equations can have expressions on both sides; a single expression is plotted where it equals zero. The library also includes a gyroid and a one-sheet hyperboloid. Set X, Y and Z bounds independently. The graph is sampled on a 3D grid, so choose a domain where the field is finite and continuous. Increasing resolution or narrowing the bounds can resolve smaller features. The field must change sign across the surface: for example, use `z = 0` rather than `z^2 = 0` for a plane.
+
+**Surface** and **Wireframe** show the equation. **Print mesh** previews the STL: **Filled region** fills the side where the left expression is smaller than the right (negative for a bare expression) and seals cuts at the plot bounds. Swap the sides to fill the opposite region. For a sheet without a block behind it, choose **Thickened surface** in Export STL and set the wall thickness. Implicit exports use one scale for all three axes, so a sphere stays round.
 
 ## Piecewise surfaces and OriginLab files
 

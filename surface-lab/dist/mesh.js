@@ -6,6 +6,7 @@ const SurfaceGeometry = (() => {
   }
   function sample(spec,n,nv=n) {
     const {shape,domain,formula} = spec;
+    if(shape==='implicit')return sampleImplicit(spec,n);
     validateGrid(n,nv);
     const vertices=[], faces=[], quads=[];
     const min=[Infinity,Infinity,Infinity],max=[-Infinity,-Infinity,-Infinity];
@@ -57,14 +58,66 @@ const SurfaceGeometry = (() => {
     const radialWall=shape==='catenoid' && formula===SurfaceMath.presets.find(p=>p.id==='catenoid').formula;
     return {vertices,faces,quads,min,max,n,nv,at,columns,rows,shape,periodicU,periodicV,twisted:twist>=0,collapsedBoundary,radialWall};
   }
-  // Fit X and Y with one scale factor. Relief is independently specified in mm.
+  function bounds(vertices){
+    const min=[Infinity,Infinity,Infinity],max=[-Infinity,-Infinity,-Infinity];
+    for(const p of vertices)for(let k=0;k<3;k++){min[k]=Math.min(min[k],p[k]);max[k]=Math.max(max[k],p[k]);}
+    return {min,max};
+  }
+  function sampleImplicit({domain,formula,shape},n){
+    if(!Number.isInteger(n)||n<8||n>48)throw Error('Use 8 to 48 intervals per axis for an implicit surface.');
+    if(domain?.length!==6||!domain.every(Number.isFinite)||[0,2,4].some(k=>!(domain[k+1]>domain[k])))
+      throw Error('Each domain maximum must be greater than its minimum.');
+    const fn=SurfaceMath.compileImplicit(formula),origin=[domain[0],domain[2],domain[4]];
+    const step=origin.map((v,k)=>(domain[2*k+1]-v)/n);
+    const size=n+1,field=new Float64Array(size**3);
+    let index=0;
+    for(let k=0;k<size;k++)for(let j=0;j<size;j++)for(let i=0;i<size;i++){
+      const x=origin[0]+i*step[0],y=origin[1]+j*step[1],z=origin[2]+k*step[2];
+      const v=fn(x,y,z);
+      if(!Number.isFinite(v))throw Error('Undefined field at ('+[x,y,z].map(a=>a.toFixed(3)).join(', ')+'). Adjust the equation or bounds.');
+      field[index++]=v;
+    }
+    const {vertices:solidVertices,faces,caps,surfaceCount}=SurfaceContour.extract(field,[size,size,size],origin,step,true);
+    if(!faces.length)throw Error('No surface crossing found. Check the equation, widen the bounds or increase resolution.');
+    const vertices=solidVertices.slice(0,surfaceCount);
+    // A field gradient gives smooth offsets even next to a very skinny triangle.
+    // Fall back to its mesh normal where a derivative is undefined.
+    const fieldNormal=p=>{
+      const f=fn(...p);
+      const g=step.map((s,k)=>{
+        const h=s*.001,q=p.slice();q[k]+=h;const hi=fn(...q);
+        q[k]=p[k]-h;const lo=fn(...q);
+        return Number.isFinite(hi)&&Number.isFinite(lo)?(hi-lo)/(2*h):Number.isFinite(hi)?(hi-f)/h:(f-lo)/h;
+      });
+      return g.every(Number.isFinite)&&Math.hypot(...g)>0?SurfaceMath.unit(g):null;
+    };
+    return {shape,n,nv:n,vertices,faces,solidVertices,solidFaces:faces.concat(caps),fieldNormal,...bounds(vertices),solidBounds:bounds(solidVertices)};
+  }
+  // Keep implicit geometry at its natural proportions, including vertical sheets.
   function transform(mesh,width,relief) {
     const span=mesh.max.map((v,k)=>v-mesh.min[k]);
     const scale=width/Math.max(span[0],span[1]);
-    const zScale=span[2] ? relief/span[2] : 0;
+    const zScale=mesh.shape==='implicit'?scale:span[2]?relief/span[2]:0;
     return ([x,y,z])=>[(x-(mesh.min[0]+span[0]/2))*scale,(y-(mesh.min[1]+span[1]/2))*scale,(z-mesh.min[2])*zScale];
   }
-  function surfaceShell(points,triangles,boundary,thickness,heightGraph) {
+  // Each edge of a printable boundary has two oppositely wound triangles.
+  // For a thickened sheet also recover its oriented rim before offsetting it.
+  function implicitEdges(faces,count,closed){
+    const edges=new Map();
+    for(const [a,b,c] of faces)for(const [i,j] of [[a,b],[b,c],[c,a]]){
+      const key=Math.min(i,j)*count+Math.max(i,j),direction=i<j?1:-1,previous=edges.get(key);
+      if(previous===undefined)edges.set(key,direction);
+      else if(previous===-direction)edges.set(key,0);
+      else throw Error('The surface meets itself at this resolution. Adjust the equation, bounds or resolution before printing.');
+    }
+    const rim=[];
+    for(const [key,direction] of edges)if(direction){
+      if(closed)throw Error('The filled mesh has an open edge. Adjust the bounds or resolution before printing.');
+      const i=Math.floor(key/count),j=key%count;rim.push(direction>0?[i,j]:[j,i]);
+    }
+    return rim;
+  }
+  function surfaceShell(points,triangles,boundary,thickness,heightGraph,directions) {
     // Accumulate area-weighted normals after scaling into physical millimeters.
     const normals=points.map(()=>[0,0,0]);
     for(const triangle of triangles) {
@@ -75,7 +128,7 @@ const SurfaceGeometry = (() => {
     const count=points.length, vertices=new Array(2*count);
     let lowest=Infinity;
     for(let i=0;i<count;i++) {
-      const direction=SurfaceMath.unit(normals[i]);
+      const direction=directions?.[i]??SurfaceMath.unit(normals[i]);
       const offset=direction.map(v=>v*thickness/2);
       vertices[i]=points[i].map((v,k)=>v+offset[k]);
       vertices[count+i]=points[i].map((v,k)=>v-offset[k]);
@@ -100,6 +153,16 @@ const SurfaceGeometry = (() => {
   }
   function solid(mesh,width,relief,thickness,construction='base') {
     if (![width,relief,thickness].every(v=>Number.isFinite(v)&&v>0)) throw Error('Print dimensions must be positive.');
+    if(mesh.shape==='implicit'){
+      if(construction==='shell'){
+        mesh.rim??=implicitEdges(mesh.faces,mesh.vertices.length,false);
+        mesh.normals??=mesh.vertices.map(mesh.fieldNormal);
+        return surfaceShell(mesh.vertices.map(transform(mesh,width,relief)),mesh.faces,mesh.rim,thickness,false,mesh.normals);
+      }
+      if(!mesh.checked){implicitEdges(mesh.solidFaces,mesh.solidVertices.length,true);mesh.checked=true;}
+      const convert=transform({shape:mesh.shape,...mesh.solidBounds},width,relief);
+      return {vertices:mesh.solidVertices.map(convert),faces:mesh.solidFaces};
+    }
     const convert=transform(mesh,width,relief), vertices=mesh.vertices.map(convert), faces=mesh.faces.slice();
     const {n,nv,at,shape}=mesh;
     if(mesh.twisted||mesh.collapsedBoundary) return SurfaceWall.fused(mesh,vertices,width,relief,thickness);

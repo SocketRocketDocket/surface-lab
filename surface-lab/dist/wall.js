@@ -43,40 +43,7 @@ const SurfaceWall=(()=>{
     }
     const threshold=radius*radius,epsilon=threshold*1e-5;
     for(let i=0;i<total;i++){const d=field[i]-threshold;field[i]=Math.abs(d)<epsilon?epsilon:d;}
-    const position=i=>[i%nx,Math.floor(i/nx)%ny,Math.floor(i/stride)];
-    const vertices=[],faces=[],edges=new Map();
-    function crossing(i,j){
-      const id=Math.min(i,j)*total+Math.max(i,j);
-      if(edges.has(id))return edges.get(id);
-      const a=position(i),b=position(j),t=field[i]/(field[i]-field[j]);
-      const index=vertices.length;
-      vertices.push(a.map((v,k)=>origin[k]+(v+t*(b[k]-v))*step));edges.set(id,index);
-      return index;
-    }
-    function face(a,b,c,outward){
-      const p=vertices[a],q=vertices[b],r=vertices[c];
-      const normal=SurfaceMath.cross(q.map((v,k)=>v-p[k]),r.map((v,k)=>v-p[k]));
-      faces.push(normal.reduce((s,v,k)=>s+v*outward[k],0)>0?[a,b,c]:[a,c,b]);
-    }
-    const offsets=[0,1,nx,nx+1,stride,stride+1,stride+nx,stride+nx+1];
-    const tetrahedra=[[0,1,3,7],[0,3,2,7],[0,2,6,7],[0,6,4,7],[0,4,5,7],[0,5,1,7]];
-    for(let z=0;z<nz-1;z++)for(let y=0;y<ny-1;y++)for(let x=0;x<nx-1;x++){
-      const base=z*stride+y*nx+x,negative=field[base]<0;
-      if(offsets.every(d=>(field[base+d]<0)===negative))continue;
-      for(const cell of tetrahedra){
-        const inside=[],outside=[];
-        for(const k of cell){const i=base+offsets[k];(field[i]<0?inside:outside).push(i);}
-        if(!inside.length||!outside.length)continue;
-        const p=position(inside[0]),out=position(outside[0]).map((v,k)=>v-p[k]);
-        if(inside.length===2){
-          const [i,j]=inside,[s,t]=outside,a=crossing(i,s),b=crossing(i,t),c=crossing(j,t),d=crossing(j,s);
-          face(a,b,c,out);face(a,c,d,out);
-        }else{
-          const single=inside.length===1?inside:outside,other=single===inside?outside:inside;
-          face(...other.map(i=>crossing(single[0],i)),out);
-        }
-      }
-    }
+    const {vertices,faces}=SurfaceContour.extract(field,dims,origin,[step,step,step]);
     if(!faces.length)throw Error('The wall could not be sampled at these print dimensions.');
     const floor=vertices.reduce((z,p)=>Math.min(z,p[2]),Infinity);
     for(const p of vertices)p[2]-=floor;
